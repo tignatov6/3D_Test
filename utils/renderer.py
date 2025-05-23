@@ -29,6 +29,8 @@ def is_front_facing(normal, camera_pos, triangle_center):
     # Скалярное произведение нормали и направления взгляда
     return glm.dot(normal, view_dir) > 0
 
+
+#Объекты должны добавляться в очередь на рендеринг с помощью макс числа потоков. Позже обрабатываться с помощью макс числа потоков, а потом отрисовываться. +Backwad Culling +Frustrum Culling +Z буффер +яркость от того, на сколько треугольник повёрнут на камеру.
 class Renderer:
     def __init__(self, app):
         self.app = app
