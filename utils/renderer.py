@@ -81,24 +81,14 @@ class Renderer:
         self.debug_vertices_printed_this_triangle = 0
         
         # --- Multithreading Disabled ---
-        # Counter for limiting debug prints of projected triangles per frame
-        self.debug_triangles_printed_this_frame = 0
-        # Counter for limiting debug prints of vertices within the first printed triangle
-        self.debug_vertices_printed_this_triangle = 0
-        
-        # --- Multithreading Disabled ---
         # ThreadPoolExecutor for parallelizing triangle processing tasks
-        # self.thread_pool = ThreadPoolExecutor(max_workers=N_THREADS)
         # self.thread_pool = ThreadPoolExecutor(max_workers=N_THREADS)
         
         # List to store Future objects from tasks submitted to the thread pool for the current frame
         # self.futures_list = []
         # --- Multithreading Disabled ---
-        # self.futures_list = []
-        # --- Multithreading Disabled ---
 
     @staticmethod
-    def _project_vertex_static(vertex, view_matrix, projection_matrix, win_res, do_debug_print): # Added do_debug_print flag
     def _project_vertex_static(vertex, view_matrix, projection_matrix, win_res, do_debug_print): # Added do_debug_print flag
         """
         Static method to project a 3D vertex to 2D screen coordinates.
@@ -109,7 +99,6 @@ class Renderer:
             view_matrix (glm.mat4): The camera's view matrix.
             projection_matrix (glm.mat4): The projection matrix.
             win_res (tuple): The window resolution (width, height) from settings (WIN_RES).
-            do_debug_print (bool): Flag to enable printing of debug information for this vertex.
             do_debug_print (bool): Flag to enable printing of debug information for this vertex.
         Returns:
             tuple: The 2D screen coordinates (x, y), or None if projection is not possible (e.g. w is zero).
@@ -147,7 +136,6 @@ class Renderer:
         # NDC range from -1 to 1. Screen coordinates usually from (0,0) top-left to (width, height).
         x = (ndc.x + 1) * (win_res[0] / 2)
         y = (1 - (ndc.y + 1) / 2) * win_res[1] # Y is often inverted: (1 - ndc.y) or (1 - (ndc.y+1)/2)
-        # The old per-vertex print for NDC and Screen was here, now handled by do_debug_print focusing on ViewSpace and ClipSpace
         # The old per-vertex print for NDC and Screen was here, now handled by do_debug_print focusing on ViewSpace and ClipSpace
         return (x, y)
 
@@ -190,37 +178,10 @@ class Renderer:
         #     all(cv.z >  cv.w for cv in clip_vertices)):
         #     return None # Culled by frustum
         # --- END DEBUG: Frustum Culling Disabled ---
-        # Reset per-triangle vertex print counter at the start of processing a new triangle
-        self.debug_vertices_printed_this_triangle = 0
 
-        # --- DEBUG: Frustum Culling Disabled ---
-        # # 1. FRUSTUM CULLING: Check if the triangle is outside the camera's viewing volume.
-        # # Transform vertices to clip space (homogeneous coordinates)
-        # v1_clip = projection_matrix @ view_matrix @ glm.vec4(*v1_3d, 1.0)
-        # v2_clip = projection_matrix @ view_matrix @ glm.vec4(*v2_3d, 1.0)
-        # v3_clip = projection_matrix @ view_matrix @ glm.vec4(*v3_3d, 1.0)
-        # clip_vertices = [v1_clip, v2_clip, v3_clip]
-        # 
-        # if (all(cv.x < -cv.w for cv in clip_vertices) or
-        #     all(cv.x >  cv.w for cv in clip_vertices) or
-        #     all(cv.y < -cv.w for cv in clip_vertices) or
-        #     all(cv.y >  cv.w for cv in clip_vertices) or
-        #     all(cv.z < -cv.w for cv in clip_vertices) or
-        #     all(cv.z >  cv.w for cv in clip_vertices)):
-        #     return None # Culled by frustum
-        # --- END DEBUG: Frustum Culling Disabled ---
-
-        # 2. NORMAL CALCULATION (Still needed for is_front_facing if not fully disabling its logic)
-        # normal = calculate_triangle_normal(v1_3d, v2_3d, v3_3d) 
         # 2. NORMAL CALCULATION (Still needed for is_front_facing if not fully disabling its logic)
         # normal = calculate_triangle_normal(v1_3d, v2_3d, v3_3d) 
         
-        # 3. TRIANGLE CENTER (Still needed for is_front_facing if not fully disabling its logic)
-        # triangle_center = glm.vec3(
-        #     (v1_3d[0] + v2_3d[0] + v3_3d[0]) / 3,
-        #     (v1_3d[1] + v2_3d[1] + v3_3d[1]) / 3,
-        #     (v1_3d[2] + v2_3d[2] + v3_3d[2]) / 3
-        # )
         # 3. TRIANGLE CENTER (Still needed for is_front_facing if not fully disabling its logic)
         # triangle_center = glm.vec3(
         #     (v1_3d[0] + v2_3d[0] + v3_3d[0]) / 3,
@@ -234,26 +195,7 @@ class Renderer:
         # if dot_product <= 0: # Also culls if dot_product is 0 (triangle is edge-on)
         #     return None # Culled by backface
         # --- END DEBUG: Backface Culling Disabled ---
-        # --- DEBUG: Backface Culling Disabled ---
-        # # 4. BACKFACE CULLING / BRIGHTNESS DOT PRODUCT
-        # dot_product = is_front_facing(normal, camera_position, triangle_center)
-        # if dot_product <= 0: # Also culls if dot_product is 0 (triangle is edge-on)
-        #     return None # Culled by backface
-        # --- END DEBUG: Backface Culling Disabled ---
 
-        # --- DEBUG: Brightness Calculation Disabled / Fixed Color ---
-        # # 5. BRIGHTNESS CALCULATION
-        # brightness_factor = max(0, min(1, dot_product)) # dot_product would need to be calculated if this was active
-        final_color = (0, 255, 0) # Fixed bright green color
-        # --- END DEBUG: Brightness Calculation Disabled ---
-
-        # --- DEBUG: Painter's Algorithm Disabled ---
-        # # 6. VIEW SPACE DEPTH CALCULATION (Still needed for Painter's Algorithm)
-        # v1_view = view_matrix @ glm.vec4(*v1_3d, 1.0)
-        # v2_view = view_matrix @ glm.vec4(*v2_3d, 1.0)
-        # v3_view = view_matrix @ glm.vec4(*v3_3d, 1.0)
-        # avg_depth = (v1_view.z + v2_view.z + v3_view.z) / 3.0
-        # --- END DEBUG: Painter's Algorithm Disabled ---
         # --- DEBUG: Brightness Calculation Disabled / Fixed Color ---
         # # 5. BRIGHTNESS CALCULATION
         # brightness_factor = max(0, min(1, dot_product)) # dot_product would need to be calculated if this was active
@@ -287,23 +229,6 @@ class Renderer:
         screen_v3 = Renderer._project_vertex_static(v3_3d, view_matrix, projection_matrix, win_res_tuple, do_print_v3)
         if do_print_v3:
             self.debug_vertices_printed_this_triangle += 1
-        # Vertex 1
-        do_print_v1 = self.debug_triangles_printed_this_frame < 1 and self.debug_vertices_printed_this_triangle < 3
-        screen_v1 = Renderer._project_vertex_static(v1_3d, view_matrix, projection_matrix, win_res_tuple, do_print_v1)
-        if do_print_v1:
-            self.debug_vertices_printed_this_triangle += 1
-        
-        # Vertex 2
-        do_print_v2 = self.debug_triangles_printed_this_frame < 1 and self.debug_vertices_printed_this_triangle < 3
-        screen_v2 = Renderer._project_vertex_static(v2_3d, view_matrix, projection_matrix, win_res_tuple, do_print_v2)
-        if do_print_v2:
-            self.debug_vertices_printed_this_triangle += 1
-
-        # Vertex 3
-        do_print_v3 = self.debug_triangles_printed_this_frame < 1 and self.debug_vertices_printed_this_triangle < 3
-        screen_v3 = Renderer._project_vertex_static(v3_3d, view_matrix, projection_matrix, win_res_tuple, do_print_v3)
-        if do_print_v3:
-            self.debug_vertices_printed_this_triangle += 1
 
         if screen_v1 and screen_v2 and screen_v3:
             screen_triangle_coords = [screen_v1, screen_v2, screen_v3]
@@ -319,24 +244,7 @@ class Renderer:
         # This logic for incrementing debug_triangles_printed_this_frame will be handled in render_mesh
         # after attempting to draw or after processing the first triangle.
         return None, None # Return None for both if projection fails
-            # Debug print for the screen coordinates of the first successfully projected triangle of a frame
-            if self.debug_triangles_printed_this_frame < 1:
-                print(f"DEBUG: Projected screen_coords for first fully projected triangle: {screen_triangle_coords}")
-                # self.debug_triangles_printed_this_frame += 1 # This counter is now incremented after drawing in render_mesh or after attempting to draw
-            # Return tuple: (screen coordinates, final calculated color). Depth is not returned.
-            return screen_triangle_coords, final_color
-        
-        # If any vertex failed projection, and we were debugging this triangle's vertices,
-        # ensure we still count it as "attempted" for frame debug count.
-        # This logic for incrementing debug_triangles_printed_this_frame will be handled in render_mesh
-        # after attempting to draw or after processing the first triangle.
-        return None, None # Return None for both if projection fails
 
-
-    def render_mesh(self, vertex_data, color, stride): # Added stride parameter
-        # stride: The number of float components per vertex in vertex_data.
-        # Example: if vertex_data is [pos(3f), normal(3f), color(3f)], stride is 9.
-        # The first 3 floats of each vertex data block are assumed to be its x, y, z position.
 
     def render_mesh(self, vertex_data, color, stride): # Added stride parameter
         # stride: The number of float components per vertex in vertex_data.
@@ -348,8 +256,6 @@ class Renderer:
         projection_matrix = self.app.projection_matrix # Assuming this is relatively static or updated per frame
         camera_position = self.camera.position
         
-        first_triangle_processed_for_debug_increment = False
-
         first_triangle_processed_for_debug_increment = False
 
 >>>>>>> Stashed changes
@@ -393,13 +299,7 @@ class Renderer:
                 # --- Painter's Algorithm Disabled: Immediate Draw ---
                 screen_coords, tri_color = self.process_triangle_data(
                     v1_3d, v2_3d, v3_3d,
-                # --- Multithreading Disabled: Direct call to process_triangle_data ---
-                # --- Painter's Algorithm Disabled: Immediate Draw ---
-                screen_coords, tri_color = self.process_triangle_data(
-                    v1_3d, v2_3d, v3_3d,
                     color, # base_color for this mesh
-                    view_matrix,
-                    projection_matrix,
                     view_matrix,
                     projection_matrix,
                     camera_position,
@@ -423,34 +323,11 @@ class Renderer:
                     self.debug_triangles_printed_this_frame += 1
                     first_triangle_processed_for_debug_increment = True
 
-                
-                if screen_coords and tri_color:
-                    pygame.draw.polygon(self.screen, tri_color, screen_coords, 0)
-                    # Increment debug counter only after the first successful draw attempt of the frame.
-                    # The vertex-level debug prints are handled within process_triangle_data.
-                    # This specific screen_coords print is for the *whole triangle*.
-                    if not first_triangle_processed_for_debug_increment and self.debug_triangles_printed_this_frame < 1:
-                        # This condition ensures we only increment debug_triangles_printed_this_frame ONCE per frame,
-                        # triggered by the first triangle of any mesh that gets drawn or attempts detailed vertex prints.
-                        # The actual print of screen_coords is in process_triangle_data.
-                        self.debug_triangles_printed_this_frame += 1 
-                        first_triangle_processed_for_debug_increment = True 
-                elif not first_triangle_processed_for_debug_increment and self.debug_triangles_printed_this_frame < 1 and self.debug_vertices_printed_this_triangle > 0 :
-                    # If vertex debug prints happened for this triangle but it wasn't drawn (e.g. projection failed for one vertex)
-                    # still count this as the "first debugged triangle" for the frame.
-                    self.debug_triangles_printed_this_frame += 1
-                    first_triangle_processed_for_debug_increment = True
-
 
     def render(self):
         """Основной метод рендеринга (очистка экрана и рендер всех объектов)."""
         self.screen.fill((0, 0, 0)) # Clear screen
         
-        # Reset the debug print counter for triangles at the start of each frame
-        self.debug_triangles_printed_this_frame = 0
-        # Note: self.debug_vertices_printed_this_triangle is reset within process_triangle_data
-
-        # Clear lists for the new frame. self.triangles_to_render is not used for drawing in this mode.
         # Reset the debug print counter for triangles at the start of each frame
         self.debug_triangles_printed_this_frame = 0
         # Note: self.debug_vertices_printed_this_triangle is reset within process_triangle_data
