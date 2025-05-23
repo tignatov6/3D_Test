@@ -47,6 +47,7 @@ class Engine:
 
     def render(self):
         self.window.fill(self.color)
+        self.renderer.render()
         self.scene.render()
         pg.display.flip()
 

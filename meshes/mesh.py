@@ -14,11 +14,15 @@ class Mesh(BaseMesh):
         self.obj_filename = obj_filename # Сохраняем имя файла
         self.model_color = color # Сохраняем цвет для модели
 
-        self.vbo_format = '3f 3f 3f'
-        self.attrs = ('in_position', 'in_normal', 'in_color')
+        self.vbo_format = '3f 3f'
+        self.attrs = ('in_position', 'in_color') # Corresponds to 3 floats for pos, 3 for normal, 3 for color
+        self.vertex_stride = 6 # Number of floats per vertex (3 floats for pos + 3 for normal + 3 for color = 9)
         self.vertex_data = self.get_vertex_data()
         print(self.vertex_data)
-        print(f"Загружено вершин: {len(self.vertex_data) // 6}")  # 36
+        if self.vertex_data.size > 0 and self.vertex_stride > 0: # Avoid division by zero
+            print(f"Загружено вершин: {len(self.vertex_data) // self.vertex_stride}")
+        else:
+            print("Загружено вершин: 0 (данные или шаг некорректны)")
         #self.vao = self.get_vao()
 
     def get_vertex_data(self):
@@ -36,5 +40,5 @@ class Mesh(BaseMesh):
         return vertex_data
 
     def render(self):
-        # Вызываем рендерер
-        self.app.renderer.render_mesh(self.vertex_data, self.model_color)
+        # Вызываем рендерер, передавая данные вершин, цвет модели и шаг (stride) вершины
+        self.app.renderer.render_mesh(self.vertex_data, self.model_color, self.vertex_stride)
