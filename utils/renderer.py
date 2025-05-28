@@ -358,6 +358,34 @@ class Renderer:
             print(f"Error calling create_or_update_text_label_cpp for ID {element_id}: {e}")
 
     @profiler
+    def create_or_update_panel(self, element_id: str, rect: pygame.Rect,
+                               bg_color: tuple, border_color: tuple, # border_color теперь ожидается как кортеж
+                               border_width: int, visible: bool):
+        if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'create_or_update_panel_cpp'):
+            self._warn_cpp_function_missing("create_or_update_panel_cpp")
+            return
+
+        bg_r, bg_g, bg_b, bg_a = self._unpack_color(bg_color)
+        
+        # border_color уже должен быть кортежем (r,g,b,a) из Panel,
+        # или (0,0,0,0) если он был None и border_width > 0.
+        # Если border_width == 0, то цвет рамки не важен.
+        brd_r, brd_g, brd_b, brd_a = self._unpack_color(border_color if border_width > 0 else (0,0,0,0))
+        
+        effective_border_width = border_width if border_color[3] > 0 else 0 # Не рисуем рамку, если она полностью прозрачна
+
+        try:
+            cpp_renderer_core.create_or_update_panel_cpp(
+                element_id, rect.x, rect.y, rect.w, rect.h,
+                bg_r, bg_g, bg_b, bg_a,
+                brd_r, brd_g, brd_b, brd_a,
+                effective_border_width, # Используем effective_border_width
+                visible
+            )
+        except Exception as e:
+            print(f"Error calling create_or_update_panel_cpp for ID {element_id}: {e}")
+
+    @profiler
     def remove_ui_element(self, element_id: str):
         if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'remove_ui_element_cpp'):
             self._warn_cpp_function_missing("remove_ui_element_cpp")

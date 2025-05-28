@@ -1,6 +1,7 @@
 import uuid
 from .button import Button # Assuming Button and TextLabel are in these files
 from .text_label import TextLabel
+from .panel import Panel
 # We need UIElement to check for element.dirty, will be modified in next step
 # from .ui_element import UIElement 
 
@@ -130,6 +131,15 @@ class UIManager:
                         font_size=element.font_size, # Python side uses this name
                         visible=element.visible
                     )
+                elif isinstance(element, Panel): # <--- Новый блок для Panel
+                    self.renderer.create_or_update_panel(
+                        element_id=element.id,
+                        rect=element.rect,
+                        bg_color=element.background_color,
+                        border_color=element.border_color, # Убедитесь, что это свойство существует и возвращает кортеж (r,g,b,a)
+                        border_width=element.border_width,
+                        visible=element.visible
+                    )
                 # Add other element types here if necessary
                 else:
                     # Fallback for generic UIElement or unknown types,
@@ -139,7 +149,9 @@ class UIManager:
                     # self.renderer.set_ui_element_visibility(element.id, element.visible)
                     pass
             except Exception as e:
-                print(f"Error syncing element {element_id} to C++: {e}")
+                print(f"Error syncing element {element_id} of type {type(element)} to C++: {e}")
+                import traceback
+                traceback.print_exc() # Для более детальной информации об ошибке
                 # Optionally, re-add to dirty_elements if it was a transient error
                 # self.dirty_elements.add(element_id) 
                 # For now, we assume it's processed or error is logged.
