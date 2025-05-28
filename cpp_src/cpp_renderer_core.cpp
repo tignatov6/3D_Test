@@ -20,10 +20,13 @@
 #include <stdexcept> 
 #include <string>    
 #include <iostream> // Для std::cerr
+#include <unordered_map> // For UI elements
+#include <mutex>         // For UI elements thread safety
 
 // SDL Includes
 #include <SDL.h>
 #include <SDL_render.h>
+#include <SDL_ttf.h>     // For text rendering
 // SDL_syswm.h больше не нужен
 
 // OpenMP
@@ -50,6 +53,78 @@ static int g_window_width_cpp = 0;
 static int g_window_height_cpp = 0;
 static std::mutex g_sdl_resources_mutex; 
 static bool g_sdl_subsystems_initialized_by_cpp = false;
+
+// --- UI Element Data Structures ---
+struct CppUiElementData {
+    std::string id;
+    SDL_Rect rect; // x, y, w, h
+    bool visible;
+    // Common properties can go here
+};
+
+struct CppButtonData : CppUiElementData {
+    std::string text;
+    SDL_Color text_color;
+    SDL_Color background_color;
+    SDL_Color border_color;
+    int border_width;
+    int font_size; // Added font_size for buttons
+    SDL_Texture* text_texture = nullptr; // Кэшированная текстура
+    SDL_Rect text_render_rect;       // Размеры и позиция кэшированной текстуры относительно rect элемента
+    bool needs_text_rerender = true; // Флаг для перерисовки текста
+    // Note: hover/click states are managed by Python, C++ just gets current appearance
+};
+
+struct CppTextData : CppUiElementData {
+    std::string text;
+    SDL_Color text_color;
+    int font_size; // Specific font size for this label
+    SDL_Texture* text_texture = nullptr; // Кэшированная текстура
+    SDL_Rect text_render_rect;       // Размеры и позиция кэшированной текстуры
+    bool needs_text_rerender = true; // Флаг для перерисовки текста
+    // std::string font_name; // Future: if specific fonts per label are needed
+};
+
+// Global storage for UI elements
+static std::unordered_map<std::string, CppButtonData> g_cpp_buttons;
+static std::unordered_map<std::string, CppTextData> g_cpp_texts;
+static std::mutex g_ui_elements_mutex;
+
+// Font Management
+const char* FONT_FILE_PATH = "data/fonts/font.ttf"; // Global font file path
+const int DEFAULT_UI_FONT_SIZE = 18; // Default font size if not specified or load fails for specific size
+
+static std::map<int, TTF_Font*> g_font_cache;
+static std::mutex g_font_cache_mutex;
+
+// Helper function to get/load font
+// В cpp_renderer_core.cpp
+TTF_Font* get_font(int size) {
+    if (size <= 0) size = DEFAULT_UI_FONT_SIZE; // Гарантируем валидный размер
+
+    std::lock_guard<std::mutex> lock(g_font_cache_mutex); // Защищаем доступ к кэшу
+    auto it = g_font_cache.find(size);
+    if (it != g_font_cache.end()) {
+        return it->second; // Шрифт найден в кэше
+    }
+
+    // Шрифт не найден в кэше, загружаем
+    TTF_Font* font = TTF_OpenFont(FONT_FILE_PATH, size);
+    if (font == nullptr) {
+        std::cerr << "C++: Failed to load font '" << FONT_FILE_PATH << "' size " << size << ". SDL_ttf Error: " << TTF_GetError() << std::endl;
+        // Опционально: попытаться вернуть шрифт по умолчанию, если он есть в кэше
+        auto default_it = g_font_cache.find(DEFAULT_UI_FONT_SIZE);
+        if (default_it != g_font_cache.end() && default_it->second != nullptr) { // Проверяем, что шрифт по умолчанию загружен
+            return default_it->second;
+        }
+        return nullptr;
+    }
+
+    g_font_cache[size] = font; // Добавляем в кэш
+    // py::print("C++: Font '", FONT_FILE_PATH, "' size ", size, " loaded and cached.");
+    return font;
+}
+
 
 // --- Data Structures (CppClipVertex, CppScreenTriangle, CppWorldDataL2, CacheKeyL2, LruCacheL2Internal, CacheKeyL1, LruCacheL1Internal) ---
 struct CppClipVertex {
@@ -626,6 +701,8 @@ const char* GetSDLEventWindowTypeString(Uint8 event_type) {
     }
 }
 
+void render_ui_elements_cpp();
+
 
 py::tuple initialize_cpp_renderer(int initial_width, int initial_height, bool fullscreen_flag,
                                   const std::string& window_title,
@@ -650,6 +727,21 @@ py::tuple initialize_cpp_renderer(int initial_width, int initial_height, bool fu
     } else {
         g_sdl_subsystems_initialized_by_cpp = false; // Already initialized (likely by Pygame)
          py::print("C++: SDL_INIT_VIDEO was already initialized.");
+    }
+
+    // Initialize SDL_ttf
+    if (TTF_Init() == -1) {
+        py::print(std::string("C++ CRITICAL: TTF_Init() failed: ") + TTF_GetError());
+        // This is more critical now, as UI might be unusable. Consider throwing.
+    } else {
+        // Pre-load default font into cache.
+        // get_font() will handle caching and error messages.
+        TTF_Font* default_cached_font = get_font(DEFAULT_UI_FONT_SIZE);
+        if (!default_cached_font) {
+            py::print(std::string("C++ Warning: Failed to load and cache the default UI font (") + FONT_FILE_PATH + std::string(", size ") + std::to_string(DEFAULT_UI_FONT_SIZE) + std::string("). Text rendering might fail."));
+        } else {
+             py::print(std::string("C++: Default UI font (size ") + std::to_string(DEFAULT_UI_FONT_SIZE) + std::string(") loaded and cached."));
+        }
     }
 
 
@@ -684,7 +776,7 @@ py::tuple initialize_cpp_renderer(int initial_width, int initial_height, bool fu
      py::print("C++: Actual window size after creation: ", g_window_width_cpp, "x", g_window_height_cpp);
 
 
-    Uint32 renderer_flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
+    Uint32 renderer_flags = SDL_RENDERER_ACCELERATED;
     g_sdl_renderer = SDL_CreateRenderer(g_sdl_native_window, -1, renderer_flags);
     if (!g_sdl_renderer) { 
         py::print("C++: VSync renderer creation failed, trying without VSync. Error: ", SDL_GetError());
@@ -708,6 +800,11 @@ py::tuple initialize_cpp_renderer(int initial_width, int initial_height, bool fu
     SDL_GetRendererInfo(g_sdl_renderer, &info);
     py::print("C++: Renderer name: ", info.name);
 
+    if (SDL_SetRenderDrawBlendMode(g_sdl_renderer, SDL_BLENDMODE_BLEND) != 0) {
+        py::print(std::string("C++ Warning: Failed to set render draw blend mode: ") + SDL_GetError());
+    } else {
+        py::print("C++: SDL_RenderDrawBlendMode set to SDL_BLENDMODE_BLEND.");
+    }
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // Nearest pixel sampling
 
@@ -721,11 +818,31 @@ py::tuple initialize_cpp_renderer(int initial_width, int initial_height, bool fu
 }
 
 void cleanup_cpp_renderer() {
-    std::lock_guard<std::mutex> lock(g_sdl_resources_mutex);
+    std::lock_guard<std::mutex> lock(g_sdl_resources_mutex); // Основная блокировка для SDL ресурсов
     py::print("C++: cleanup_cpp_renderer called.");
     global_l1_cache_cpp_instance.clear();
     global_l2_cache_cpp_instance.clear();
     
+    { // Clear UI elements and their textures
+        std::lock_guard<std::mutex> ui_lock(g_ui_elements_mutex); // Блокировка для UI-коллекций
+        for (auto& pair : g_cpp_buttons) {
+            if (pair.second.text_texture) {
+                SDL_DestroyTexture(pair.second.text_texture);
+                pair.second.text_texture = nullptr; // Безопасно обнулить указатель
+            }
+        }
+        g_cpp_buttons.clear();
+
+        for (auto& pair : g_cpp_texts) {
+            if (pair.second.text_texture) {
+                SDL_DestroyTexture(pair.second.text_texture);
+                pair.second.text_texture = nullptr; // Безопасно обнулить указатель
+            }
+        }
+        g_cpp_texts.clear();
+        py::print("C++: UI elements and their textures cleared.");
+    }
+
     { 
         std::lock_guard<std::mutex> frame_lock(global_frame_triangles_mutex_);
         global_frame_triangles_cpp_.clear();
@@ -744,14 +861,28 @@ void cleanup_cpp_renderer() {
     }
 
     if (g_sdl_subsystems_initialized_by_cpp) {
-        if (SDL_WasInit(SDL_INIT_VIDEO)) { // Check if it's still initialized
+        if (SDL_WasInit(SDL_INIT_VIDEO)) {
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
             py::print("C++: SDL_INIT_VIDEO SubSystem quit by cpp_renderer_core.");
         }
-        // SDL_Quit(); // Only call SDL_Quit if this module called SDL_Init() for everything.
-                   // If Pygame called SDL_Init(0), Pygame should call SDL_Quit().
-                   // It's safer to just quit the subsystems we explicitly started.
     }
+
+    {
+        std::lock_guard<std::mutex> font_lock(g_font_cache_mutex); // Отдельная блокировка для кэша шрифтов
+        for (auto const& [size, font_ptr] : g_font_cache) {
+            if (font_ptr) {
+                TTF_CloseFont(font_ptr);
+            }
+        }
+        g_font_cache.clear();
+        py::print("C++: Font cache cleared and fonts closed.");
+    }
+
+    if (TTF_WasInit()) { 
+        TTF_Quit();
+        py::print("C++: SDL_ttf quit.");
+    }
+    
     py::print("C++: Cleanup finished.");
 }
 
@@ -895,6 +1026,7 @@ void render_accumulated_triangles_cpp() {
     SDL_RenderClear(g_sdl_renderer);
 
     if (triangles_to_render_this_frame.empty()) {
+        render_ui_elements_cpp(); 
         SDL_RenderPresent(g_sdl_renderer); 
         return;
     }
@@ -940,6 +1072,12 @@ void render_accumulated_triangles_cpp() {
             // std::cerr << "C++ (SDL_RenderGeometry) failed: " << SDL_GetError() << std::endl;
         }
     }
+
+    // --- ДОБАВЛЕН ВЫЗОВ ОТРИСОВКИ UI ---
+    // Отрисовываем UI элементы поверх 3D сцены
+    render_ui_elements_cpp(); 
+    // -----------------------------------
+
     SDL_RenderPresent(g_sdl_renderer);
 }
 
@@ -1097,6 +1235,337 @@ py::tuple get_relative_mouse_state_cpp() {
     return py::make_tuple(xrel, yrel);
 }
 
+// Вспомогательная функция для сравнения SDL_Color
+bool SDL_ColorEquals(const SDL_Color& c1, const SDL_Color& c2) {
+    return c1.r == c2.r && c1.g == c2.g && c1.b == c2.b && c1.a == c2.a;
+}
+
+// Вспомогательная функция для сравнения SDL_Rect
+bool SDL_RectEquals(const SDL_Rect& r1, const SDL_Rect& r2) {
+    return r1.x == r2.x && r1.y == r2.y && r1.w == r2.w && r1.h == r2.h;
+}
+
+// --- UI Management Functions (Implementation) ---
+void create_or_update_text_label_cpp(
+    const std::string& element_id, int x, int y, int w, int h,
+    const std::string& text,
+    uint8_t text_r, uint8_t text_g, uint8_t text_b, uint8_t text_a,
+    int font_size, bool visible) {
+
+    std::lock_guard<std::mutex> lock(g_ui_elements_mutex);
+
+    SDL_Rect new_rect = {x, y, w, h};
+    SDL_Color new_text_color = {text_r, text_g, text_b, text_a};
+    int new_font_size = (font_size > 0) ? font_size : DEFAULT_UI_FONT_SIZE;
+
+    auto it = g_cpp_texts.find(element_id);
+    if (it != g_cpp_texts.end()) {
+        // Элемент существует, обновляем
+        CppTextData& label_ref = it->second;
+
+        // Проверяем, изменились ли параметры, влияющие на текстуру текста
+        bool text_params_changed = (label_ref.text != text) ||
+                                   !SDL_ColorEquals(label_ref.text_color, new_text_color) ||
+                                   (label_ref.font_size != new_font_size) ||
+                                   !SDL_RectEquals(label_ref.rect, new_rect); // Rect тоже влияет на позиционирование текста
+
+        if (text_params_changed || label_ref.visible != visible) { // Также если изменилась видимость
+            if (label_ref.text_texture && text_params_changed) { // Уничтожаем текстуру только если текстовые параметры изменились
+                SDL_DestroyTexture(label_ref.text_texture);
+                label_ref.text_texture = nullptr;
+            }
+            if (text_params_changed) { // Если любые текстовые или размерные параметры изменились
+                 label_ref.needs_text_rerender = true;
+            }
+        }
+
+        // Обновляем все поля
+        label_ref.rect = new_rect;
+        label_ref.text = text;
+        label_ref.text_color = new_text_color;
+        label_ref.font_size = new_font_size;
+        label_ref.visible = visible;
+        // label_ref.id остается прежним
+
+    } else {
+        // Элемент не существует, создаем новый
+        CppTextData new_label;
+        new_label.id = element_id;
+        new_label.rect = new_rect;
+        new_label.text = text;
+        new_label.text_color = new_text_color;
+        new_label.font_size = new_font_size;
+        new_label.visible = visible;
+        new_label.text_texture = nullptr;       // Инициализируется как nullptr
+        new_label.needs_text_rerender = true; // Новый текст всегда требует ререндера
+
+        g_cpp_texts[element_id] = new_label;
+    }
+}
+
+void create_or_update_button_cpp(
+    const std::string& element_id, int x, int y, int w, int h,
+    const std::string& text,
+    uint8_t bg_r, uint8_t bg_g, uint8_t bg_b, uint8_t bg_a,
+    uint8_t text_r, uint8_t text_g, uint8_t text_b, uint8_t text_a,
+    uint8_t border_r, uint8_t border_g, uint8_t border_b, uint8_t border_a,
+    int border_width, bool visible, int font_size) {
+
+    std::lock_guard<std::mutex> lock(g_ui_elements_mutex);
+
+    SDL_Rect new_rect = {x, y, w, h};
+    SDL_Color new_bg_color = {bg_r, bg_g, bg_b, bg_a};
+    SDL_Color new_text_color = {text_r, text_g, text_b, text_a};
+    SDL_Color new_border_color = {border_r, border_g, border_b, border_a};
+    int new_font_size = (font_size > 0) ? font_size : DEFAULT_UI_FONT_SIZE;
+
+    auto it = g_cpp_buttons.find(element_id);
+    if (it != g_cpp_buttons.end()) {
+        // Элемент существует, обновляем
+        CppButtonData& button_ref = it->second;
+
+        // Проверяем, изменились ли параметры, влияющие на текстуру текста
+        bool text_params_changed = (button_ref.text != text) ||
+                                   !SDL_ColorEquals(button_ref.text_color, new_text_color) ||
+                                   (button_ref.font_size != new_font_size) ||
+                                   !SDL_RectEquals(button_ref.rect, new_rect);
+
+        // Если изменились любые параметры, которые требуют визуального обновления
+        // (текст, цвета, размеры, видимость)
+        if (text_params_changed ||
+            !SDL_ColorEquals(button_ref.background_color, new_bg_color) ||
+            !SDL_ColorEquals(button_ref.border_color, new_border_color) ||
+            button_ref.border_width != border_width ||
+            button_ref.visible != visible) {
+
+            if (button_ref.text_texture && text_params_changed) {
+                SDL_DestroyTexture(button_ref.text_texture);
+                button_ref.text_texture = nullptr;
+            }
+            if (text_params_changed) {
+                button_ref.needs_text_rerender = true;
+            }
+        }
+
+        // Обновляем все поля
+        button_ref.rect = new_rect;
+        button_ref.text = text;
+        button_ref.background_color = new_bg_color;
+        button_ref.text_color = new_text_color;
+        button_ref.border_color = new_border_color;
+        button_ref.border_width = border_width;
+        button_ref.visible = visible;
+        button_ref.font_size = new_font_size;
+        // button_ref.id остается прежним
+
+    } else {
+        // Элемент не существует, создаем новый
+        CppButtonData new_button;
+        new_button.id = element_id;
+        new_button.rect = new_rect;
+        new_button.text = text;
+        new_button.background_color = new_bg_color;
+        new_button.text_color = new_text_color;
+        new_button.border_color = new_border_color;
+        new_button.border_width = border_width;
+        new_button.visible = visible;
+        new_button.font_size = new_font_size;
+        new_button.text_texture = nullptr;
+        new_button.needs_text_rerender = true;
+
+        g_cpp_buttons[element_id] = new_button;
+    }
+}
+
+void remove_ui_element_cpp(const std::string& element_id) {
+    std::lock_guard<std::mutex> lock(g_ui_elements_mutex);
+
+    auto it_button = g_cpp_buttons.find(element_id);
+    if (it_button != g_cpp_buttons.end()) {
+        if (it_button->second.text_texture) {
+            SDL_DestroyTexture(it_button->second.text_texture);
+            // it_button->second.text_texture = nullptr; // Не обязательно, т.к. элемент удаляется
+        }
+        g_cpp_buttons.erase(it_button);
+        // py::print("C++: Removed button ", element_id);
+        return; 
+    }
+
+    auto it_text = g_cpp_texts.find(element_id);
+    if (it_text != g_cpp_texts.end()) {
+        if (it_text->second.text_texture) {
+            SDL_DestroyTexture(it_text->second.text_texture);
+            // it_text->second.text_texture = nullptr; // Не обязательно
+        }
+        g_cpp_texts.erase(it_text);
+        // py::print("C++: Removed text label ", element_id);
+        return; 
+    }
+    // py::print("C++: UI Element not found for removal: ", element_id);
+}
+
+void set_ui_element_visibility_cpp(const std::string& element_id, bool visible) {
+    std::lock_guard<std::mutex> lock(g_ui_elements_mutex);
+    auto it_button = g_cpp_buttons.find(element_id);
+    if (it_button != g_cpp_buttons.end()) {
+        it_button->second.visible = visible;
+        // py::print("C++: Visibility set for button ", element_id, " to ", visible);
+        return;
+    }
+    auto it_text = g_cpp_texts.find(element_id);
+    if (it_text != g_cpp_texts.end()) {
+        it_text->second.visible = visible;
+        // py::print("C++: Visibility set for text ", element_id, " to ", visible);
+    } else {
+        // py::print("C++: UI Element not found for visibility change: ", element_id);
+    }
+}
+
+// --- UI Rendering Function ---
+void render_ui_elements_cpp() {
+    if (!g_sdl_renderer) {
+        // py::print("C++ render_ui_elements_cpp: g_sdl_renderer is null!"); // Можно раскомментировать для отладки
+        return;
+    }
+
+    // Блокировка мьютекса здесь, так как мы будем изменять элементы (needs_text_rerender, text_texture)
+    std::lock_guard<std::mutex> lock(g_ui_elements_mutex);
+
+    // Render Buttons
+    // Используем неконстантный итератор, так как можем изменять элементы (button.text_texture и button.needs_text_rerender)
+    for (auto& pair : g_cpp_buttons) {
+        CppButtonData& button = pair.second; // Получаем ссылку на изменяемый объект
+        if (!button.visible) continue;
+
+        // Draw background
+        SDL_SetRenderDrawColor(g_sdl_renderer, button.background_color.r, button.background_color.g, button.background_color.b, button.background_color.a);
+        SDL_RenderFillRect(g_sdl_renderer, &button.rect);
+
+        // Draw border
+        if (button.border_width > 0) {
+            SDL_SetRenderDrawColor(g_sdl_renderer, button.border_color.r, button.border_color.g, button.border_color.b, button.border_color.a);
+            for (int i = 0; i < button.border_width; ++i) {
+                SDL_Rect border_rect = {button.rect.x + i, button.rect.y + i, button.rect.w - (2 * i), button.rect.h - (2 * i)};
+                if (border_rect.w <= 0 || border_rect.h <= 0) break;
+                SDL_RenderDrawRect(g_sdl_renderer, &border_rect);
+            }
+        }
+
+        // Render text (с кэшированием текстуры)
+        if (button.needs_text_rerender && !button.text.empty()) {
+            if (button.text_texture) {
+                SDL_DestroyTexture(button.text_texture);
+                button.text_texture = nullptr;
+            }
+
+            TTF_Font* font_to_use = get_font(button.font_size);
+            if (font_to_use) {
+                SDL_Surface* text_surface = TTF_RenderUTF8_Blended(font_to_use, button.text.c_str(), button.text_color);
+                if (text_surface) {
+                    button.text_texture = SDL_CreateTextureFromSurface(g_sdl_renderer, text_surface);
+                    if (button.text_texture) {
+                        // Сохраняем целевой прямоугольник для отрисовки
+                        button.text_render_rect.w = text_surface->w;
+                        button.text_render_rect.h = text_surface->h;
+                        // Центрируем текст внутри кнопки
+                        button.text_render_rect.x = button.rect.x + (button.rect.w - button.text_render_rect.w) / 2;
+                        button.text_render_rect.y = button.rect.y + (button.rect.h - button.text_render_rect.h) / 2;
+
+                        // Опционально: обрезать текст, если он выходит за границы кнопки
+                        // Это более сложная логика, которую можно добавить позже, если необходимо
+                        // Например, через установку SDL_RenderSetClipRect
+
+                        button.needs_text_rerender = false; // Текстура обновлена
+                    } else {
+                        py::print(std::string("C++ Warning: SDL_CreateTextureFromSurface failed for button text '") + button.text + std::string("': ") + SDL_GetError());
+                        button.needs_text_rerender = true; // Попробуем в следующий раз
+                    }
+                    SDL_FreeSurface(text_surface);
+                } else {
+                    py::print(std::string("C++ Warning: TTF_RenderUTF8_Blended failed for button text '") + button.text + std::string("': ") + TTF_GetError());
+                    button.needs_text_rerender = true; // Попробуем в следующий раз
+                }
+            } else {
+                py::print(std::string("C++ Warning: Font not available for button text '") + button.text + std::string("'. Size: ") + std::to_string(button.font_size));
+                button.needs_text_rerender = true; // Попробуем в следующий раз
+            }
+        } else if (button.text.empty() && button.text_texture) {
+            // Если текст стал пустым, удаляем старую текстуру
+            SDL_DestroyTexture(button.text_texture);
+            button.text_texture = nullptr;
+            button.needs_text_rerender = false; // Больше нечего рендерить
+        }
+
+
+        // Draw cached text texture
+        if (button.text_texture && !button.needs_text_rerender) {
+             SDL_RenderCopy(g_sdl_renderer, button.text_texture, nullptr, &button.text_render_rect);
+        }
+    }
+
+    // Render Text Labels
+    // Используем неконстантный итератор
+    for (auto& pair : g_cpp_texts) {
+        CppTextData& label = pair.second; // Получаем ссылку на изменяемый объект
+        if (!label.visible) continue;
+
+        // Render text (с кэшированием текстуры)
+        if (label.needs_text_rerender && !label.text.empty()) {
+            if (label.text_texture) {
+                SDL_DestroyTexture(label.text_texture);
+                label.text_texture = nullptr;
+            }
+
+            TTF_Font* font_to_use = get_font(label.font_size);
+            if (font_to_use) {
+                SDL_Surface* text_surface = TTF_RenderUTF8_Blended(font_to_use, label.text.c_str(), label.text_color);
+                if (text_surface) {
+                    label.text_texture = SDL_CreateTextureFromSurface(g_sdl_renderer, text_surface);
+                    if (label.text_texture) {
+                        label.text_render_rect.w = text_surface->w;
+                        label.text_render_rect.h = text_surface->h;
+
+                        // Если у метки rect.w или rect.h были 0 (для авто-размера с Python),
+                        // то C++ сторона просто центрирует текст в предоставленном Python rect.
+                        // Python UIElement/TextLabel должен был бы вычислить правильный rect,
+                        // если auto_size_rect=True.
+                        // Здесь мы просто центрируем отрендеренный текст внутри label.rect.
+                        // Если label.rect.w/h маленькие, текст может обрезаться при SDL_RenderCopy.
+                        label.text_render_rect.x = label.rect.x + (label.rect.w - label.text_render_rect.w) / 2;
+                        label.text_render_rect.y = label.rect.y + (label.rect.h - label.text_render_rect.h) / 2;
+                        
+                        // Можно добавить логику обрезки по label.rect, если SDL_RenderCopy выходит за его пределы,
+                        // или использовать SDL_RenderSetClipRect(), если весь текст должен быть внутри label.rect.
+                        // Простейший вариант - позволить SDL_RenderCopy рисовать как есть,
+                        // а Python сторона отвечает за корректный rect.
+
+                        label.needs_text_rerender = false; // Текстура обновлена
+                    } else {
+                        py::print(std::string("C++ Warning: SDL_CreateTextureFromSurface failed for label text '") + label.text + std::string("': ") + SDL_GetError());
+                        label.needs_text_rerender = true;
+                    }
+                    SDL_FreeSurface(text_surface);
+                } else {
+                    py::print(std::string("C++ Warning: TTF_RenderUTF8_Blended failed for label text '") + label.text + std::string("': ") + TTF_GetError());
+                    label.needs_text_rerender = true;
+                }
+            } else {
+                py::print(std::string("C++ Warning: Font not available for label text '") + label.text + std::string("'. Size: ") + std::to_string(label.font_size));
+                label.needs_text_rerender = true;
+            }
+        } else if (label.text.empty() && label.text_texture) {
+            SDL_DestroyTexture(label.text_texture);
+            label.text_texture = nullptr;
+            label.needs_text_rerender = false;
+        }
+
+        // Draw cached text texture
+        if (label.text_texture && !label.needs_text_rerender) {
+             SDL_RenderCopy(g_sdl_renderer, label.text_texture, nullptr, &label.text_render_rect);
+        }
+    }
+}
+
 
 // --- Test Function for Python (Оставляем для отладки, если нужен) ---
 py::array_t<float> calculate_triangle_normal_test_wrapper(
@@ -1157,6 +1626,29 @@ PYBIND11_MODULE(cpp_renderer_core, m) {
     m.def("get_mouse_state_cpp", &get_mouse_state_cpp, "Returns (x, y, button_mask) for the mouse.");
     m.def("get_relative_mouse_state_cpp", &get_relative_mouse_state_cpp, "Returns (xrel, yrel) for relative mouse motion.");
 
+    // --- UI Management ---
+    m.def("create_or_update_button_cpp", &create_or_update_button_cpp, 
+          "Creates or updates a button UI element in C++.",
+          py::arg("element_id"), py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"),
+          py::arg("text"),
+          py::arg("bg_r"), py::arg("bg_g"), py::arg("bg_b"), py::arg("bg_a"),
+          py::arg("text_r"), py::arg("text_g"), py::arg("text_b"), py::arg("text_a"),
+          py::arg("border_r"), py::arg("border_g"), py::arg("border_b"), py::arg("border_a"),
+          py::arg("border_width"), py::arg("visible"), py::arg("font_size"));
+
+    m.def("create_or_update_text_label_cpp", &create_or_update_text_label_cpp,
+          "Creates or updates a text label UI element in C++.",
+          py::arg("element_id"), py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"),
+          py::arg("text"),
+          py::arg("text_r"), py::arg("text_g"), py::arg("text_b"), py::arg("text_a"),
+          py::arg("font_size"), py::arg("visible"));
+
+    m.def("remove_ui_element_cpp", &remove_ui_element_cpp, 
+          "Removes a UI element by ID from C++ maps.", py::arg("element_id"));
+
+    m.def("set_ui_element_visibility_cpp", &set_ui_element_visibility_cpp,
+          "Sets the visibility of a UI element by ID in C++.", 
+          py::arg("element_id"), py::arg("visible"));
 
     // --- Test/Debug ---
     m.def("calculate_triangle_normal_cpp_test_func", &calculate_triangle_normal_test_wrapper,

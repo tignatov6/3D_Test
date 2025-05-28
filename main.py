@@ -95,6 +95,20 @@ else:
         print(f"CRITICAL: Failed to import test Renderer from utils.renderer_test: {e}")
         sys.exit(1)
 
+try:
+    from ui import UIManager
+except ImportError as e:
+    print(f"CRITICAL: Failed to import UIManager from ui: {e}")
+    # Depending on how critical UI is, you might choose to exit or continue with a dummy UIManager.
+    # For this integration, let's assume it's critical.
+    sys.exit(1)
+
+try:
+    from ui import Button, TextLabel # Import Button and TextLabel
+except ImportError as e:
+    print(f"CRITICAL: Failed to import Button or TextLabel from ui: {e}")
+    sys.exit(1)
+
 
 class Engine:
     @main_profiler
@@ -178,15 +192,14 @@ class Engine:
 
         # Настройка мыши через Renderer (SDL)
         if self.renderer:
-            self.renderer.set_relative_mouse_mode(True) # Для first-person камеры
-            self.renderer.set_mouse_visible(False)
+            self.renderer.set_relative_mouse_mode(False) # Для first-person камеры
+            self.renderer.set_mouse_visible(True)
             # self.renderer.set_window_grab(True) # Опционально, если нужно жесткое удержание
         else:
             print("CRITICAL: Renderer not available in on_init for mouse/window setup.")
             self.cleanup_and_exit(1)
 
 
-        self.scene = Scene(self) # Scene может использовать self.renderer для добавления объектов
         
         # projection_matrix создается/обновляется в update_resolution_dependent_settings,
         # который вызывается из Renderer.__init__ после определения фактических размеров окна.
@@ -194,7 +207,20 @@ class Engine:
         if not hasattr(self, 'projection_matrix'):
             print("Warning: Projection matrix not set by Renderer. Creating default.")
             current_aspect_ratio = self.current_win_width / self.current_win_height if self.current_win_height > 0 else (WIN_RES.x / WIN_RES.y if WIN_RES.y > 0 else 1.0)
-            self.projection_matrix = self.create_projection_matrix(current_aspect_ratio) 
+            self.projection_matrix = self.create_projection_matrix(current_aspect_ratio)
+        
+        # Initialize UIManager
+        try:
+            self.ui_manager = UIManager(renderer_instance=self.renderer)
+            print("UIManager initialized.")
+        except Exception as e_ui_manager_init:
+            print(f"CRITICAL: Error during UIManager initialization: {e_ui_manager_init}")
+            import traceback
+            traceback.print_exc()
+            self.cleanup_and_exit(1) # Exit if UI manager fails to init
+        
+        
+        self.scene = Scene(self) # Scene может использовать self.renderer для добавления объектов
         
         print("Engine components initialized.")
         
@@ -238,6 +264,9 @@ class Engine:
     def update(self):
         self.player.update() # Player.update теперь в основном обновляет векторы камеры
         self.scene.update() 
+        
+        if hasattr(self, 'ui_manager') and self.ui_manager:
+            self.ui_manager.update(self.delta_time)
 
         self.delta_time = self.clock.tick(MAX_FPS if 'MAX_FPS' in globals() else 0) / 1000.0 
         
@@ -268,6 +297,10 @@ class Engine:
             print("ERROR: renderer.prepare_for_new_frame() is not available!")
             self.is_running = False 
             return
+        
+        # Sync UI elements to C++ before rendering the scene
+        if hasattr(self, 'ui_manager') and self.ui_manager:
+            self.ui_manager.sync_dirty_elements_to_cpp()
 
         # Рендеринг сцены (передача объектов в C++ для накопления треугольников)
         self.scene.render() 
@@ -302,15 +335,19 @@ class Engine:
         
         # Обработка системных событий SDL (выход, изменение размера окна и т.д.)
         for event_data in self.sdl_events: # sdl_events - это список словарей
+            # Pass event to UIManager first
+            if hasattr(self, 'ui_manager') and self.ui_manager:
+                self.ui_manager.handle_event(event_data) # event_data is a dict from C++
+
             event_type = event_data.get('type')
             if event_type == 'QUIT':
                 self.is_running = False
-                break
+                break # Exit loop if QUIT event is received
             if event_type == 'KEYDOWN':
                 # SDL_SCANCODE_ESCAPE = 41 (пример, лучше иметь константы)
                 if event_data.get('scancode') == 41: # SDL_SCANCODE_ESCAPE
                     self.is_running = False
-                    break
+                    break # Exit loop if ESCAPE is pressed
             if event_type == 'WINDOWEVENT':
                 if event_data.get('event_id') == SDL_WINDOWEVENT_RESIZED or \
                    event_data.get('event_id') == SDL_WINDOWEVENT_SIZE_CHANGED:
@@ -319,14 +356,24 @@ class Engine:
                     if new_w != self.current_win_width or new_h != self.current_win_height:
                         print(f"Engine: Detected SDL WINDOWEVENT_SIZE_CHANGED/RESIZED to {new_w}x{new_h}")
                         self.update_resolution_dependent_settings(new_w, new_h)
+            
+            if not self.is_running: # Check if QUIT or ESCAPE was processed
+                break
         
         # Дополнительно обрабатываем события Pygame, не связанные с окном (джойстик, аудио и т.д.)
+        # These are Pygame event objects, not dicts. UIManager might not handle them
+        # unless its elements are designed for both or events are converted.
+        # For now, UIManager primarily processes SDL dict events.
         for event in pg.event.get():
             if event.type == pg.QUIT: # Общее событие Pygame QUIT на всякий случай
                 self.is_running = False
             # Здесь можно добавить обработку других событий Pygame
             # if hasattr(self.player, 'handle_other_pygame_event'):
             #    self.player.handle_other_pygame_event(event, self.delta_time)
+            #
+            # If UI elements need to handle these Pygame events, they would need conversion
+            # or UIManager.handle_event would need to distinguish.
+            # Example: self.ui_manager.handle_event(pygame_event_to_dict_adapter(event))
 
     @main_profiler
     def manage_gc(self):

@@ -93,6 +93,112 @@ else:
     print("Info: SDL2 configuration successful or ignored.")
 
 
+# --- SDL2_ttf Configuration ---
+# !!! ВНИМАНИЕ: ОТРЕДАКТИРУЙТЕ SDL2TTF_BASE_DIR В СООТВЕТСТВИИ С ВАШЕЙ УСТАНОВКОЙ SDL2_ttf !!!
+sdl2_ttf_cflags = []
+sdl2_ttf_libs = []
+sdl_ttf_config_successful = False
+try:
+    if platform.system() == "Windows":
+        SDL2TTF_BASE_DIR = "C:/Libs/SDL2_ttf-2.24.0" # <--- УКАЖИТЕ ВАШ ПУТЬ
+        if not os.path.isdir(SDL2TTF_BASE_DIR):
+            print(f"ERROR: SDL2_ttf base directory not found at '{SDL2TTF_BASE_DIR}'.")
+        else:
+            SDL2TTF_INCLUDE_DIR = os.path.join(SDL2TTF_BASE_DIR, "include")
+            python_arch = platform.architecture()[0]
+            SDL2TTF_LIB_SUBDIR = "x64" if python_arch == "64bit" else ("x86" if python_arch == "32bit" else None)
+            if not SDL2TTF_LIB_SUBDIR: print(f"ERROR: Unknown Python architecture for SDL2_ttf '{python_arch}'.")
+            SDL2TTF_LIB_DIR = os.path.join(SDL2TTF_BASE_DIR, "lib", SDL2TTF_LIB_SUBDIR) if SDL2TTF_LIB_SUBDIR else None
+            
+            ttf_header_check_path = os.path.join(SDL2TTF_INCLUDE_DIR, "SDL_ttf.h") # SDL_ttf.h обычно лежит прямо в include или include/SDL2
+            if not os.path.exists(ttf_header_check_path): # Проверяем альтернативный путь SDL2/SDL_ttf.h
+                 ttf_header_check_path = os.path.join(SDL2TTF_INCLUDE_DIR, "SDL2", "SDL_ttf.h")
+
+            ttf_lib_check_path = os.path.join(SDL2TTF_LIB_DIR, "SDL2_ttf.lib") if SDL2TTF_LIB_DIR else None
+
+            if os.path.isdir(SDL2TTF_INCLUDE_DIR) and SDL2TTF_LIB_DIR and os.path.isdir(SDL2TTF_LIB_DIR) and \
+               os.path.exists(ttf_header_check_path) and (ttf_lib_check_path and os.path.exists(ttf_lib_check_path)):
+                sdl2_ttf_cflags.append(f'/I{SDL2TTF_INCLUDE_DIR}')
+                sdl2_ttf_libs.extend([f'/LIBPATH:{SDL2TTF_LIB_DIR}', 'SDL2_ttf.lib'])
+                sdl_ttf_config_successful = True
+            else:
+                print("ERROR: Manual SDL2_ttf configuration for Windows failed.")
+                print(f"  SDL2_ttf Include Dir: '{SDL2TTF_INCLUDE_DIR}' (exists: {os.path.isdir(SDL2TTF_INCLUDE_DIR)})")
+                print(f"  SDL_ttf.h path used for check: '{ttf_header_check_path}' (exists: {os.path.exists(ttf_header_check_path)})")
+                print(f"  SDL2_ttf Lib Dir: '{SDL2TTF_LIB_DIR}' (exists: {os.path.isdir(SDL2TTF_LIB_DIR) if SDL2TTF_LIB_DIR else 'N/A'})")
+                print(f"  SDL2_ttf.lib path used for check: '{ttf_lib_check_path}' (exists: {os.path.exists(ttf_lib_check_path) if ttf_lib_check_path else 'N/A'})")
+    else: # Linux or macOS
+        try:
+            sdl2_ttf_cflags_str = os.popen('pkg-config --cflags SDL2_ttf').read().strip()
+            sdl2_ttf_libs_str = os.popen('pkg-config --libs SDL2_ttf').read().strip()
+            if sdl2_ttf_cflags_str: sdl2_ttf_cflags.extend(sdl2_ttf_cflags_str.split())
+            if sdl2_ttf_libs_str: sdl2_ttf_libs.extend(sdl2_ttf_libs_str.split())
+            if sdl2_ttf_cflags and sdl2_ttf_libs: sdl_ttf_config_successful = True
+            else: print("Warning: pkg-config SDL2_ttf output was empty.")
+        except Exception as e: print(f"Warning: pkg-config SDL2_ttf failed: {e}.")
+except Exception as e:
+    print(f"ERROR: An unexpected error occurred during SDL2_ttf configuration: {e}")
+
+if not sdl_ttf_config_successful and not os.getenv("SETUPPY_IGNORE_SDLTtf_FAILURE"):
+    print("CRITICAL: SDL2_ttf configuration was not successful. Text rendering will likely fail.")
+    sys.exit("SDL2_ttf configuration failed.")
+else:
+    print("Info: SDL2_ttf configuration successful or ignored.")
+
+
+# --- SDL2_image Configuration ---
+# !!! ВНИМАНИЕ: ОТРЕДАКТИРУЙТЕ SDL2IMAGE_BASE_DIR В СООТВЕТСТВИИ С ВАШЕЙ УСТАНОВКОЙ SDL2_image !!!
+sdl2_image_cflags = []
+sdl2_image_libs = []
+sdl_image_config_successful = False
+try:
+    if platform.system() == "Windows":
+        SDL2IMAGE_BASE_DIR = "C:/Libs/SDL2_image-2.8.8" # <--- УКАЖИТЕ ВАШ ПУТЬ
+        if not os.path.isdir(SDL2IMAGE_BASE_DIR):
+            print(f"ERROR: SDL2_image base directory not found at '{SDL2IMAGE_BASE_DIR}'.")
+        else:
+            SDL2IMAGE_INCLUDE_DIR = os.path.join(SDL2IMAGE_BASE_DIR, "include")
+            python_arch = platform.architecture()[0]
+            SDL2IMAGE_LIB_SUBDIR = "x64" if python_arch == "64bit" else ("x86" if python_arch == "32bit" else None)
+            if not SDL2IMAGE_LIB_SUBDIR: print(f"ERROR: Unknown Python architecture for SDL2_image '{python_arch}'.")
+            SDL2IMAGE_LIB_DIR = os.path.join(SDL2IMAGE_BASE_DIR, "lib", SDL2IMAGE_LIB_SUBDIR) if SDL2IMAGE_LIB_SUBDIR else None
+
+            image_header_check_path = os.path.join(SDL2IMAGE_INCLUDE_DIR, "SDL_image.h") # SDL_image.h обычно лежит прямо в include или include/SDL2
+            if not os.path.exists(image_header_check_path): # Проверяем альтернативный путь SDL2/SDL_image.h
+                 image_header_check_path = os.path.join(SDL2IMAGE_INCLUDE_DIR, "SDL2", "SDL_image.h")
+
+            image_lib_check_path = os.path.join(SDL2IMAGE_LIB_DIR, "SDL2_image.lib") if SDL2IMAGE_LIB_DIR else None
+
+            if os.path.isdir(SDL2IMAGE_INCLUDE_DIR) and SDL2IMAGE_LIB_DIR and os.path.isdir(SDL2IMAGE_LIB_DIR) and \
+               os.path.exists(image_header_check_path) and (image_lib_check_path and os.path.exists(image_lib_check_path)):
+                sdl2_image_cflags.append(f'/I{SDL2IMAGE_INCLUDE_DIR}')
+                sdl2_image_libs.extend([f'/LIBPATH:{SDL2IMAGE_LIB_DIR}', 'SDL2_image.lib'])
+                sdl_image_config_successful = True
+            else:
+                print("ERROR: Manual SDL2_image configuration for Windows failed.")
+                print(f"  SDL2_image Include Dir: '{SDL2IMAGE_INCLUDE_DIR}' (exists: {os.path.isdir(SDL2IMAGE_INCLUDE_DIR)})")
+                print(f"  SDL_image.h path used for check: '{image_header_check_path}' (exists: {os.path.exists(image_header_check_path)})")
+                print(f"  SDL2_image Lib Dir: '{SDL2IMAGE_LIB_DIR}' (exists: {os.path.isdir(SDL2IMAGE_LIB_DIR) if SDL2IMAGE_LIB_DIR else 'N/A'})")
+                print(f"  SDL2_image.lib path used for check: '{image_lib_check_path}' (exists: {os.path.exists(image_lib_check_path) if image_lib_check_path else 'N/A'})")
+
+    else: # Linux or macOS
+        try:
+            sdl2_image_cflags_str = os.popen('pkg-config --cflags SDL2_image').read().strip()
+            sdl2_image_libs_str = os.popen('pkg-config --libs SDL2_image').read().strip()
+            if sdl2_image_cflags_str: sdl2_image_cflags.extend(sdl2_image_cflags_str.split())
+            if sdl2_image_libs_str: sdl2_image_libs.extend(sdl2_image_libs_str.split())
+            if sdl2_image_cflags and sdl2_image_libs: sdl_image_config_successful = True
+            else: print("Warning: pkg-config SDL2_image output was empty.")
+        except Exception as e: print(f"Warning: pkg-config SDL2_image failed: {e}.")
+except Exception as e:
+    print(f"ERROR: An unexpected error occurred during SDL2_image configuration: {e}")
+
+if not sdl_image_config_successful and not os.getenv("SETUPPY_IGNORE_SDLIMAGE_FAILURE"):
+    print("CRITICAL: SDL2_image configuration was not successful. Image loading will likely fail.")
+    sys.exit("SDL2_image configuration failed.")
+else:
+    print("Info: SDL2_image configuration successful or ignored.")
+
 #--- Compiler and Linker Arguments ---
 # Базовые агрессивные, но ПОРТАТИВНЫЕ флаги
 # Убраны /arch:AVX2 и -march=native для большей портативности
@@ -109,7 +215,12 @@ final_link_args = []
 compiler_type = None
 
 final_compile_args.extend(sdl2_cflags)
+final_compile_args.extend(sdl2_ttf_cflags)
+final_compile_args.extend(sdl2_image_cflags)
+
 final_link_args.extend(sdl2_libs)
+final_link_args.extend(sdl2_ttf_libs)
+final_link_args.extend(sdl2_image_libs)
 
 if PGO_ENABLED:
     print(f"\n!!! PGO АКТИВИРОВАНА: PGO_BUILD_PHASE = {PGO_PHASE_INTERNAL} !!!")
@@ -251,6 +362,8 @@ setup(
 
 print("\n--- Завершение скрипта сборки ---")
 print(f"Info: SDL2 сконфигурирован {'успешно' if sdl_config_successful else 'НЕУСПЕШНО или проигнорировано'}.")
+print(f"Info: SDL2_ttf сконфигурирован {'успешно' if sdl_ttf_config_successful else 'НЕУСПЕШНО или проигнорировано'}.")     # <--- ДОБАВЛЕНО
+print(f"Info: SDL2_image сконфигурирован {'успешно' if sdl_image_config_successful else 'НЕУСПЕШНО или проигнорировано'}.") # <--- ДОБАВЛЕНО
 print(f"Info: Тип компилятора: {compiler_type if compiler_type else 'Unknown'}")
 if PGO_ENABLED:
     print(f"Info: Сборка с PGO: PGO_BUILD_PHASE = {PGO_PHASE_INTERNAL}")
