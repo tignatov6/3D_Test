@@ -1,25 +1,69 @@
-from numba import njit
-import numpy as np
+# settings.py
 import glm
 import math
 
-# resolution
-WIN_RES = glm.vec2(1280, 720)
+# --- Окно и Разрешение ---
+WIN_RES = glm.vec2(1280, 720)  # Запрашиваемое разрешение окна (ширина, высота)
+FULLSCREEN = False             # Запускать ли приложение в полноэкранном режиме (True/False)
+MAX_FPS = 0                  # Максимальное количество кадров в секунду. 0 - без ограничения.
+                               # Если установить, например, 60, clock.tick(60) будет пытаться поддерживать этот FPS.
 
-# camera
-ASPECT_RATIO = WIN_RES.x / WIN_RES.y
-FOV_DEG = 50
-V_FOV = glm.radians(FOV_DEG)  # vertical FOV
-H_FOV = 2 * math.atan(math.tan(V_FOV * 0.5) * ASPECT_RATIO)  # horizontal FOV
-NEAR = 0.1
-FAR = 2000.0
-PITCH_MAX = glm.radians(89)
+# --- Камера ---
+# ASPECT_RATIO будет вычисляться динамически в Engine на основе фактических размеров окна.
+# Это значение может использоваться как начальное или fallback.
+ASPECT_RATIO = WIN_RES.x / WIN_RES.y if WIN_RES.y > 0 else 16.0/9.0 
+FOV_DEG = 60                          # Угол обзора камеры по вертикали в градусах
+V_FOV = glm.radians(FOV_DEG)          # Вертикальный угол обзора в радианах
+# H_FOV также будет зависеть от динамического ASPECT_RATIO, но можно оставить формулу для справки
+H_FOV = 2 * math.atan(math.tan(V_FOV * 0.5) * ASPECT_RATIO) # Горизонтальный угол обзора (вычисляется)
+NEAR = 0.1                            # Ближняя плоскость отсечения камеры
+FAR = 1000.0                          # Дальняя плоскость отсечения камеры
+PITCH_MAX = glm.radians(89.0)         # Максимальный угол наклона камеры вверх/вниз
 
-# player
-PLAYER_SPEED = 0.005
-PLAYER_ROT_SPEED = 0.003
-PLAYER_POS = glm.vec3(0, 0, 1)
-MOUSE_SENSITIVITY = 0.002
+# --- Игрок (Камера от первого лица) ---
+PLAYER_SPEED = 50.0        # Скорость перемещения игрока (единиц в секунду)
+PLAYER_ROT_SPEED = 0.003   # Скорость поворота игрока (для клавиатуры, если будет использоваться)
+PLAYER_POS = glm.vec3(0.0, 0.0, 3.0) # Начальная позиция игрока в мире
+MOUSE_SENSITIVITY = 0.002  # Чувствительность мыши для управления камерой
 
-# colors
-BG_COLOR = glm.vec3(0.1, 0.16, 0.25)
+# --- Цвета ---
+BG_COLOR = glm.vec3(0.08, 0.10, 0.18) # Цвет фона окна (R, G, B от 0.0 до 1.0)
+
+# --- Настройки C++ Рендерера и Кэшей ---
+MAX_L1_CACHE_SIZE_CPP = 1000  
+MAX_L2_CACHE_SIZE_CPP = 10000 
+
+# --- Флаги Пайплайна Рендеринга (передаются в C++) ---
+TEST = False # Не используется напрямую рендерером, но может использоваться в main.py
+
+LIGHT = True               
+BACK_CULL = True           
+CLIPPING = True            
+SORT = True                
+
+# --- Настройки Геометрии и Вершин ---
+VERTEX_DATA_STRIDE = 9     
+USE_VERTEX_NORMALS = True  
+
+# --- Отсечение Мелких Треугольников ---
+SMALL_TRIANGLE_CULLING_ENABLED = False 
+SMALL_TRIANGLE_MIN_AREA = 0.5         
+
+# --- Отладочные Флаги ---
+DEBUG_CLIPPING = False     
+DEBUG_SESSION_FPS = True   # Для вывода статистики сессии при выходе
+
+# --- SDL Scancode константы ---
+# Решено оставить их в player.py, так как они в основном там и используются.
+# Если понадобится глобально, можно будет перенести сюда.
+# Пример:
+# SDL_SCANCODE_UNKNOWN = 0
+# SDL_SCANCODE_A = 4
+# SDL_SCANCODE_W = 26
+# SDL_SCANCODE_ESCAPE = 41
+# ... и так далее
+
+# --- Пути к ресурсам (Пример) ---
+# Рекомендуется определять пути относительно BASE_PATH в main.py
+# MODELS_DIR = 'assets/models/'
+# TEXTURES_DIR = 'assets/textures/'

@@ -1,20 +1,48 @@
-# obj_loader.py
 import numpy as np
+
+def parse_mtl(mtl_filename):
+    """
+    Парсит файл .mtl и извлекает информацию о материалах.
+    Возвращает словарь материалов с их свойствами (например, {'Material': {'Kd': [r, g, b]}}).
+    """
+    materials = {}
+    current_material = None
+    try:
+        with open(mtl_filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if parts[0] == 'newmtl':
+                    current_material = parts[1]
+                    materials[current_material] = {}
+                elif parts[0] == 'Kd' and current_material is not None:
+                    materials[current_material]['Kd'] = list(map(float, parts[1:4]))
+    except FileNotFoundError:
+        print(f"Ошибка: Файл '{mtl_filename}' не найден.")
+    except Exception as e:
+        print(f"Ошибка при парсинге MTL файла '{mtl_filename}': {e}")
+    return materials
 
 def load_obj_file(filename, default_color=(0.5, 0.5, 0.5)):
     """
     Загружает геометрию из .obj файла.
-    Поддерживает только вершины (v) и грани (f).
+    Поддерживает вершины (v), нормали (vn), грани (f) и материалы из .mtl.
     Грани могут быть треугольниками или четырехугольниками (автоматически триангулируются).
-    Не поддерживает текстурные координаты (vt) или нормали (vn) в этой базовой версии.
-    Каждой вершине присваивается default_color.
+    Для вершин без указанных нормалей используется default_normal = [0.0, 0.0, 1.0].
+    Цвет вершин берется из материала (.mtl), если он определен, иначе используется default_color.
 
     Возвращает:
-        numpy.array: Массив данных вершин в формате [x,y,z, r,g,b, x,y,z, r,g,b, ...], dtype='float32'
+        numpy.array: Массив данных вершин в формате [x,y,z, r,g,b, nx,ny,nz, ...], dtype='float32'
                      или пустой массив в случае ошибки.
     """
     vertices_raw = []  # Список для хранения координат вершин (v)
-    final_vertex_data = [] # Список для хранения итоговых данных (pos + color)
+    normals_raw = []   # Список для хранения нормалей (vn)
+    materials = {}     # Словарь для хранения материалов из .mtl
+    current_material = None
+    final_vertex_data = [] # Список для хранения итоговых данных (pos + color + normal)
+    default_normal = [0.0, 0.0, 1.0]
 
     try:
         with open(filename, 'r') as f:
@@ -22,54 +50,64 @@ def load_obj_file(filename, default_color=(0.5, 0.5, 0.5)):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-
                 parts = line.split()
                 command = parts[0]
 
-                if command == 'v':
+                if command == 'mtllib':
+                    # Загрузка файла .mtl
+                    mtl_filename = parts[1]
+                    materials = parse_mtl('assets/'+mtl_filename)
+                elif command == 'usemtl':
+                    # Установка текущего материала
+                    current_material = parts[1]
+                elif command == 'v':
                     # Координаты вершины
                     vertices_raw.append(list(map(float, parts[1:4])))
+                elif command == 'vn':
+                    # Нормали
+                    normals_raw.append(list(map(float, parts[1:4])))
                 elif command == 'f':
                     # Определение грани
-                    # Форматы граней: f v1 v2 v3 ...
-                    #                f v1/vt1 v2/vt2 v3/vt3 ...
-                    #                f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3 ...
-                    #                f v1//vn1 v2//vn2 v3//vn3 ...
-                    # Мы будем парсить только индексы вершин (v)
-                    
-                    face_vertex_indices = []
+                    face_vertices = []
                     for part in parts[1:]:
-                        # Берем только индекс вершины (до первого '/')
-                        v_index = int(part.split('/')[0])
-                        # OBJ файлы используют 1-based indexing, Python 0-based
-                        face_vertex_indices.append(v_index - 1)
-                    
-                    # Простая триангуляция для полигонов (например, квадов)
-                    # Если грань f v0 v1 v2 v3, создаем треугольники (v0,v1,v2) и (v0,v2,v3)
-                    if len(face_vertex_indices) >= 3:
-                        # Первый треугольник
-                        idx0, idx1, idx2 = face_vertex_indices[0], face_vertex_indices[1], face_vertex_indices[2]
-                        
-                        final_vertex_data.extend(vertices_raw[idx0])
-                        final_vertex_data.extend(default_color)
-                        final_vertex_data.extend(vertices_raw[idx1])
-                        final_vertex_data.extend(default_color)
-                        final_vertex_data.extend(vertices_raw[idx2])
-                        final_vertex_data.extend(default_color)
+                        subparts = part.split('/')
+                        v_index = int(subparts[0]) - 1
+                        vn_index = None
+                        if len(subparts) >= 3 and subparts[2]:
+                            vn_index = int(subparts[2]) - 1
+                        face_vertices.append((v_index, vn_index))
 
-                        # Если это квад (или больше), добавляем еще треугольники (fan triangulation)
-                        for i in range(3, len(face_vertex_indices)):
-                            idx_prev = face_vertex_indices[i-1]
-                            idx_curr = face_vertex_indices[i]
-                            
-                            # Треугольник (v0, v_prev, v_curr)
-                            final_vertex_data.extend(vertices_raw[idx0]) # v0
-                            final_vertex_data.extend(default_color)
-                            final_vertex_data.extend(vertices_raw[idx_prev]) # v_prev
-                            final_vertex_data.extend(default_color)
-                            final_vertex_data.extend(vertices_raw[idx_curr]) # v_curr
-                            final_vertex_data.extend(default_color)
-                            
+                    # Триангуляция
+                    if len(face_vertices) >= 3:
+                        # Первый треугольник
+                        for i in [0, 1, 2]:
+                            v_index, vn_index = face_vertices[i]
+                            position = vertices_raw[v_index]
+                            normal = normals_raw[vn_index] if vn_index is not None and vn_index < len(normals_raw) else default_normal
+                            # Получение цвета из текущего материала
+                            if current_material in materials and 'Kd' in materials[current_material]:
+                                color = materials[current_material]['Kd']
+                            else:
+                                color = default_color
+                            final_vertex_data.extend(position)
+                            final_vertex_data.extend(color)
+                            final_vertex_data.extend(normal)
+
+                        # Дополнительные треугольники для полигонов
+                        for i in range(3, len(face_vertices)):
+                            for j in [0, i-1, i]:
+                                v_index, vn_index = face_vertices[j]
+                                position = vertices_raw[v_index]
+                                normal = normals_raw[vn_index] if vn_index is not None and vn_index < len(normals_raw) else default_normal
+                                # Используем тот же цвет для всех треугольников одной грани
+                                if current_material in materials and 'Kd' in materials[current_material]:
+                                    color = materials[current_material]['Kd']
+                                else:
+                                    color = default_color
+                                final_vertex_data.extend(position)
+                                final_vertex_data.extend(color)
+                                final_vertex_data.extend(normal)
+
     except FileNotFoundError:
         print(f"Ошибка: Файл '{filename}' не найден.")
         return np.array([], dtype='float32')
@@ -80,49 +118,16 @@ def load_obj_file(filename, default_color=(0.5, 0.5, 0.5)):
     if not final_vertex_data:
         print(f"Предупреждение: Не найдено данных о вершинах/гранях в файле '{filename}' или формат не поддерживается.")
         return np.array([], dtype='float32')
-        
+
     return np.array(final_vertex_data, dtype='float32')
 
+# Пример использования
 if __name__ == '__main__':
-    # Пример использования (создайте простой test.obj для проверки)
-    # Пример test.obj:
-    """
-    # Cube
-    v 1.0 1.0 -1.0
-    v 1.0 -1.0 -1.0
-    v 1.0 1.0 1.0
-    v 1.0 -1.0 1.0
-    v -1.0 1.0 -1.0
-    v -1.0 -1.0 -1.0
-    v -1.0 1.0 1.0
-    v -1.0 -1.0 1.0
-
-    f 1 2 4 3
-    f 3 4 8 7
-    f 7 8 6 5
-    f 5 6 2 1
-    f 5 7 3 1 # Лицевая сторона (Z+)
-    f 2 6 8 4 # Задняя сторона (Z-)
-    """
-    # Создайте файл 'test_cube.obj' с содержимым выше
-    # with open('test_cube.obj', 'w') as f_obj:
-    #     f_obj.write("v 1.0 1.0 -1.0\nv 1.0 -1.0 -1.0\nv 1.0 1.0 1.0\nv 1.0 -1.0 1.0\n")
-    #     f_obj.write("v -1.0 1.0 -1.0\nv -1.0 -1.0 -1.0\nv -1.0 1.0 1.0\nv -1.0 -1.0 1.0\n")
-    #     f_obj.write("f 1 2 4 3\nf 3 4 8 7\nf 7 8 6 5\nf 5 6 2 1\nf 5 7 3 1\nf 2 6 8 4\n")
-
-    vertex_data = load_obj_file('test_cube.obj', default_color=(1.0, 0.0, 0.0))
+    vertex_data = load_obj_file('test.obj', default_color=(1.0, 0.0, 0.0))
     if vertex_data.size > 0:
-        print(f"Загружено {vertex_data.size // 6} вершин.") # Каждая вершина это 3(pos) + 3(color) = 6 float
-        print("Первые 3 вершины (pos+color):")
-        print(vertex_data[:18].reshape(-1,6)) # 3 вершины * (3 float pos + 3 float color) = 18
+        num_vertices = vertex_data.size // 9
+        print(f"Загружено {num_vertices} вершин.")
+        print("Первые 3 вершины (pos+color+normal):")
+        print(vertex_data[:27].reshape(-1,9))
     else:
         print("Данные не загружены.")
-
-    # Пример с треугольником
-    # with open('test_triangle.obj', 'w') as f_obj:
-    #     f_obj.write("v 0.0 0.5 0.0\nv -0.5 -0.5 0.0\nv 0.5 -0.5 0.0\n")
-    #     f_obj.write("f 1 2 3\n")
-    # vertex_data_tri = load_obj_file('test_triangle.obj', default_color=(0.0, 1.0, 0.0))
-    # if vertex_data_tri.size > 0:
-    #     print(f"\nЗагружено {vertex_data_tri.size // 6} вершин для треугольника.")
-    #     print(vertex_data_tri)

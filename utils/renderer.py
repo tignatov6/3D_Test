@@ -1,84 +1,301 @@
-# Давайте дополним ваш рендерер для работы с мешами через Pygame. Основная задача — преобразовать 3D вершины в 2D экранные координаты и отрисовать треугольники.
-
-# ### 1. **Класс рендерера (renderer.py)**
-# ```python
-import pygame
+# renderer.py
+import pygame # Pygame все еще может использоваться для других целей (например, pg.time.Clock в Engine)
 import numpy as np
-from settings import *
+from settings import * # Загружаем все настройки (FOV_DEG, NEAR, FAR и т.д. нужны для prepare_for_new_frame)
+import glm
+import sys 
+import atexit # Для вызова cleanup_cpp_renderer при выходе
+# import time # time не используется напрямую в этом файле
 
-def calculate_triangle_normal(v1, v2, v3):
-    # Преобразуем вершины в векторы glm
-    a = glm.vec3(v1)
-    b = glm.vec3(v2)
-    c = glm.vec3(v3)
-    
-    # Вычисляем векторы сторон
-    edge1 = b - a
-    edge2 = c - a
-    
-    # Векторное произведение
-    normal = glm.cross(edge1, edge2)
-    
-    # Нормализуем результат
-    return glm.normalize(normal)
+# --- Попытка импорта C++ модуля ---
+try:
+    import cpp_renderer_core
+    CPP_MODULE_LOADED = True
+    print(f"--- Модуль cpp_renderer_core успешно загружен! ({cpp_renderer_core.__file__}) ---")
+except ImportError as e:
+    print(f"--- КРИТИЧЕСКАЯ ОШИБКА: Не удалось импортировать модуль cpp_renderer_core: {e} ---")
+    print("--- Убедитесь, что вы скомпилировали модуль командой: python setup.py build_ext --inplace ---")
+    print("--- Также проверьте, что все зависимости C++ модуля (например, SDL2.dll) доступны. ---")
+    print("--- Работа приложения будет прекращена. ---")
+    CPP_MODULE_LOADED = False
+    sys.exit(1) # Критическая ошибка, выходим
 
-def is_front_facing(normal, camera_pos, triangle_center):
-    # Вектор от центра треугольника к камере
-    view_dir = glm.normalize(glm.vec3(camera_pos) - triangle_center)
-    
-    # Скалярное произведение нормали и направления взгляда
-    return glm.dot(normal, view_dir) > 0
+# Профайлер, если используется
+try:
+    from utils.profiler import get_profiler
+    profiler = get_profiler(__name__)
+except ImportError:
+    def profiler_dummy_decorator(func): return func # Заглушка
+    profiler = profiler_dummy_decorator 
+    print("Warning: Profiler (utils.profiler) not found for renderer.py. Using dummy profiler.")
 
 
-#Объекты должны добавляться в очередь на рендеринг с помощью макс числа потоков. Позже обрабатываться с помощью макс числа потоков, а потом отрисовываться. +Backwad Culling +Frustrum Culling +Z буффер +яркость от того, на сколько треугольник повёрнут на камеру.
 class Renderer:
-    def __init__(self, app):
-        self.app = app
-        self.screen = app.window
-        self.printed = False
+    def __init__(self, app_instance, initial_width: int, initial_height: int, 
+                 fullscreen_flag: bool, window_title: str, bg_color_glm: glm.vec3):
+        global CPP_MODULE_LOADED
+        if not CPP_MODULE_LOADED:
+            # Эта проверка дублируется, но на всякий случай, если объект создается без предварительной проверки
+            print("CRITICAL: cpp_renderer_core module not loaded. Renderer cannot function.")
+            sys.exit(1)
+
+        self.app = app_instance # Ссылка на главный класс Engine
+        
         try:
-            self.camera = app.camera
-        except:
-            self.camera = app.player
+            # Пытаемся получить камеру из app.camera или app.player
+            self.camera = getattr(self.app, 'camera', getattr(self.app, 'player', None))
+            if self.camera is None:
+                raise AttributeError("Camera object not found in app instance (app.player or app.camera).")
+        except AttributeError as e:
+            print(f"CRITICAL ERROR in Renderer __init__: {e}")
+            sys.exit(1)
 
-    def project_vertex(self, vertex):
-        """Преобразует 3D вершину в 2D экранные координаты."""
-        # 1. Применяем видовую матрицу
-        view_space = self.camera.get_view_matrix() @ glm.vec4(*vertex, 1.0)
+        # Настройки, передаваемые в C++ при инициализации или для кадра
+        self.clipping_setting = CLIPPING # из settings.py
+        self.debug_clipping_setting = DEBUG_CLIPPING # из settings.py
+        self.debug_color_clipped_list_uint8 = np.array([255, 0, 255], dtype=np.uint8) # Розовый
+
+        self.bg_clear_color_tuple_uint8 = np.array([
+            int(bg_color_glm.x * 255), 
+            int(bg_color_glm.y * 255), 
+            int(bg_color_glm.z * 255)
+        ], dtype=np.uint8)
+
+        self.sort_in_cpp = SORT # из settings.py
+        self.small_feature_culling_enabled = SMALL_TRIANGLE_CULLING_ENABLED
+        self.small_triangle_min_area = SMALL_TRIANGLE_MIN_AREA if self.small_feature_culling_enabled else 0.0
+
+        self.max_l1_cache_size_for_cpp = MAX_L1_CACHE_SIZE_CPP
+        self.max_l2_cache_size_for_cpp = MAX_L2_CACHE_SIZE_CPP
         
-        # 2. Применяем проекционную матрицу
-        clip_space = self.app.projection_matrix @ view_space
+        self.actual_window_width = 0
+        self.actual_window_height = 0
+
+        # --- Инициализация C++ рендерера (SDL окно создается здесь) ---
+        try:
+            # cpp_renderer_core.initialize_cpp_renderer теперь возвращает (actual_width, actual_height)
+            returned_dimensions = cpp_renderer_core.initialize_cpp_renderer(
+                initial_width,
+                initial_height,
+                fullscreen_flag,
+                window_title,
+                self.max_l1_cache_size_for_cpp,
+                self.max_l2_cache_size_for_cpp,
+                self.bg_clear_color_tuple_uint8
+            )
+            self.actual_window_width = returned_dimensions[0]
+            self.actual_window_height = returned_dimensions[1]
+            print(f"Python Renderer: Actual SDL window dimensions from C++: {self.actual_window_width}x{self.actual_window_height}")
+
+            # Обновляем Engine с фактическими размерами окна
+            if hasattr(self.app, 'update_resolution_dependent_settings'):
+                self.app.update_resolution_dependent_settings(self.actual_window_width, self.actual_window_height)
+            else:
+                print("Warning: app instance does not have 'update_resolution_dependent_settings' method.")
+            
+            print("--- C++ Renderer (SDL) initialized successfully with its own window. ---")
+            # Регистрируем функцию очистки C++ ресурсов при выходе из Python
+            atexit.register(self.cleanup_on_exit)
+
+        except RuntimeError as e_init_cpp:
+            print(f"--- КРИТИЧЕСКАЯ ОШИБКА при инициализации C++ рендерера: {e_init_cpp} ---")
+            CPP_MODULE_LOADED = False 
+            sys.exit(1) 
+        except Exception as e_init_general: # Ловим другие возможные исключения
+            print(f"--- НЕПРЕДВИДЕННАЯ ОШИБКА при инициализации C++ рендерера: {e_init_general} ---")
+            CPP_MODULE_LOADED = False
+            sys.exit(1)
+            
+    def cleanup_on_exit(self):
+        """Вызывается автоматически при завершении работы Python для очистки C++ ресурсов."""
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'cleanup_cpp_renderer'):
+            try:
+                print("--- Python Renderer: Initiating C++ renderer cleanup... ---")
+                cpp_renderer_core.cleanup_cpp_renderer()
+                print("--- Python Renderer: C++ renderer resources cleaned up. ---")
+            except Exception as e:
+                print(f"Error during C++ renderer cleanup from Python: {e}")
+    
+    @profiler
+    def prepare_for_new_frame(self):
+        """Готовит C++ сторону к новому кадру, передавая необходимые параметры."""
+        if not CPP_MODULE_LOADED: return
+
+        view_matrix_np = np.array(self.camera.get_view_matrix(), dtype=np.float32).flatten(order='F')
         
-        # 3. Перспективное деление
-        if clip_space.w != 0:
-            ndc = clip_space / clip_space.w
+        # Убедимся, что self.app.projection_matrix существует и актуальна
+        if not hasattr(self.app, 'projection_matrix') or self.app.projection_matrix is None:
+            print("Warning: app.projection_matrix not found or is None in prepare_for_new_frame. Using identity matrix.")
+            # Создаем дефолтную проекционную матрицу, если она отсутствует
+            # Это может случиться, если update_resolution_dependent_settings не был вызван или не сработал корректно.
+            fallback_aspect_ratio = self.actual_window_width / self.actual_window_height if self.actual_window_height > 0 else (16.0/9.0)
+            projection_matrix = glm.perspective(glm.radians(FOV_DEG), fallback_aspect_ratio, NEAR, FAR)
+            projection_matrix_np = np.array(projection_matrix, dtype=np.float32).flatten(order='F')
         else:
-            return None
+            projection_matrix_np = np.array(self.app.projection_matrix, dtype=np.float32).flatten(order='F')
+
+        camera_pos_w_np = np.array([self.camera.position.x, self.camera.position.y, self.camera.position.z], dtype=np.float32)
+        current_small_tri_thresh = self.small_triangle_min_area if self.small_feature_culling_enabled else 0.0
+
+        try:
+            cpp_renderer_core.set_frame_parameters_cpp(
+                view_matrix_np,
+                projection_matrix_np,
+                camera_pos_w_np,
+                LIGHT,  # из settings.py
+                BACK_CULL, # из settings.py
+                self.clipping_setting,
+                self.debug_clipping_setting,
+                self.debug_color_clipped_list_uint8,
+                self.sort_in_cpp,
+                current_small_tri_thresh
+            )
+        except RuntimeError as e_set_params:
+            print(f"RuntimeError in set_frame_parameters_cpp: {e_set_params}")
+        except Exception as e_set_params_general:
+            print(f"Unexpected error in set_frame_parameters_cpp: {e_set_params_general}")
+
+    @profiler
+    def render_mesh(self, 
+                    object_id: int, 
+                    vertex_data_np: np.ndarray, 
+                    vertex_data_format_info: dict, 
+                    position: glm.vec3 = glm.vec3(0,0,0),
+                    rotation: glm.vec3 = glm.vec3(0,0,0), 
+                    scale: glm.vec3 = glm.vec3(1,1,1)):
+        """Передает данные объекта в C++ для обработки и накопления треугольников."""
+        if not CPP_MODULE_LOADED: return
+        if vertex_data_np.size == 0: return 
+
+        transform_params_list = [
+            position.x, position.y, position.z,
+            rotation.x, rotation.y, rotation.z, 
+            scale.x, scale.y, scale.z
+        ]
+        transform_params_np = np.array(transform_params_list, dtype=np.float32)
         
-        # 4. Преобразование в экранные координаты
-        x = (ndc.x + 1) * (WIN_RES[0] / 2)
-        y = (1 - (ndc.y + 1) / 2) * WIN_RES[1]
-        #print(f"Vertex {vertex} -> NDC ({ndc.x:.2f}, {ndc.y:.2f}) -> Screen ({x}, {y})")
-        return (x, y)
+        use_vertex_normals_setting = vertex_data_format_info.get('USE_VERTEX_NORMALS', USE_VERTEX_NORMALS) # Fallback to settings
+        vertex_stride = vertex_data_format_info.get('VERTEX_DATA_STRIDE', VERTEX_DATA_STRIDE) # Fallback to settings
 
-    def render_mesh(self, vertex_data, color):
-        stride = 6  # 3 координаты позиции + 3 цвета на вершину
-        for i in range(0, len(vertex_data), stride*3):  # 3 вершины на треугольник
-            triangle = []
-            for j in range(3):
-                idx = i + j * stride
-                if idx + 5 >= len(vertex_data):  # Проверка выхода за границы
-                    break
-                x = vertex_data[idx]
-                y = vertex_data[idx+1]
-                z = vertex_data[idx+2]
-                # TODO: Backwad culling
-                screen_pos = self.project_vertex((x, y, z))
-                if screen_pos:
-                    triangle.append(screen_pos)
-            if len(triangle) == 3:
-                pygame.draw.polygon(self.screen, (255, 255, 255), triangle, 1)  # Белый цвет для теста
+        try:
+            # GIL будет отпущен внутри этой C++ функции, если там используется py::gil_scoped_release
+            cpp_renderer_core.process_and_accumulate_object_cpp(
+                object_id,
+                transform_params_np,
+                vertex_data_np, 
+                vertex_stride,
+                use_vertex_normals_setting
+            )
+        except RuntimeError as e_cpp_process:
+            print(f"КРИТИЧЕСКАЯ ОШИБКА Runtime в C++ (process_and_accumulate) для объекта {object_id}: {e_cpp_process}")
+        except Exception as e_cpp_general_process:
+            print(f"ОБЩАЯ ОШИБКА при вызове C++ (process_and_accumulate) для объекта {object_id}: {e_cpp_general_process}")
 
-    def render(self):
-        """Основной метод рендеринга (очистка экрана и рендер всех объектов)."""
-        self.screen.fill((0, 0, 0))
+    @profiler
+    def render(self): 
+        """Вызывает C++ функцию для рендеринга всех накопленных треугольников с использованием SDL."""
+        if not CPP_MODULE_LOADED: return
+
+        try:
+            # GIL будет отпущен внутри этой C++ функции, если там используется py::gil_scoped_release
+            cpp_renderer_core.render_accumulated_triangles_cpp()
+        except RuntimeError as e_render_cpp:
+            print(f"КРИТИЧЕСКАЯ ОШИБКА Runtime в C++ (render_accumulated_triangles_cpp): {e_render_cpp}")
+        except Exception as e_render_general:
+            print(f"ОБЩАЯ ОШИБКА при вызове C++ (render_accumulated_triangles_cpp): {e_render_general}")
+
+    # --- Методы-обертки для новых C++ функций управления окном и вводом ---
+
+    def set_window_title(self, title: str):
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_window_title_cpp'):
+            try:
+                cpp_renderer_core.set_window_title_cpp(title)
+            except Exception as e:
+                print(f"Error calling set_window_title_cpp: {e}")
+        else: self._warn_cpp_function_missing("set_window_title_cpp")
+
+
+    def set_relative_mouse_mode(self, active: bool):
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_relative_mouse_mode_cpp'):
+            try:
+                cpp_renderer_core.set_relative_mouse_mode_cpp(active)
+            except Exception as e:
+                print(f"Error calling set_relative_mouse_mode_cpp: {e}")
+        else: self._warn_cpp_function_missing("set_relative_mouse_mode_cpp")
+
+    def set_mouse_visible(self, visible: bool):
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_mouse_visible_cpp'):
+            try:
+                cpp_renderer_core.set_mouse_visible_cpp(visible)
+            except Exception as e:
+                print(f"Error calling set_mouse_visible_cpp: {e}")
+        else: self._warn_cpp_function_missing("set_mouse_visible_cpp")
+
+    def set_window_grab(self, grab_on: bool):
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_window_grab_cpp'):
+            try:
+                cpp_renderer_core.set_window_grab_cpp(grab_on)
+            except Exception as e:
+                print(f"Error calling set_window_grab_cpp: {e}")
+        else: self._warn_cpp_function_missing("set_window_grab_cpp")
+        
+    def poll_sdl_events(self) -> list:
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'poll_sdl_events_cpp'):
+            try:
+                return cpp_renderer_core.poll_sdl_events_cpp()
+            except Exception as e:
+                print(f"Error calling poll_sdl_events_cpp: {e}")
+                return []
+        else: 
+            self._warn_cpp_function_missing("poll_sdl_events_cpp")
+            return []
+
+    def get_keyboard_state(self) -> bytes: # Ожидаем bytes от C++
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'get_keyboard_state_cpp'):
+            try:
+                state = cpp_renderer_core.get_keyboard_state_cpp()
+                if not isinstance(state, bytes): # Дополнительная проверка типа
+                    print(f"Warning: get_keyboard_state_cpp did not return bytes, got {type(state)}")
+                    return b'' # Возвращаем пустые байты в случае ошибки
+                return state
+            except Exception as e:
+                print(f"Error calling get_keyboard_state_cpp: {e}")
+                return b''
+        else: 
+            self._warn_cpp_function_missing("get_keyboard_state_cpp")
+            return b'' # Возвращаем пустые байты, если функция отсутствует
+
+    def get_mouse_state(self) -> tuple: # Ожидаем (x, y, button_mask)
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'get_mouse_state_cpp'):
+            try:
+                return cpp_renderer_core.get_mouse_state_cpp()
+            except Exception as e:
+                print(f"Error calling get_mouse_state_cpp: {e}")
+                return (0, 0, 0)
+        else: 
+            self._warn_cpp_function_missing("get_mouse_state_cpp")
+            return (0, 0, 0) # Возвращаем дефолтные значения
+
+    def get_relative_mouse_state(self) -> tuple: # Ожидаем (xrel, yrel)
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'get_relative_mouse_state_cpp'):
+            try:
+                return cpp_renderer_core.get_relative_mouse_state_cpp()
+            except Exception as e:
+                print(f"Error calling get_relative_mouse_state_cpp: {e}")
+                return (0, 0)
+        else: 
+            self._warn_cpp_function_missing("get_relative_mouse_state_cpp")
+            return (0, 0) # Возвращаем дефолтные значения
+
+    def _warn_cpp_function_missing(self, func_name: str):
+        """Вспомогательная функция для предупреждения об отсутствующей C++ функции."""
+        print(f"Warning: C++ function '{func_name}' not found in cpp_renderer_core module.")
+
+    def set_window_title(self, title: str):
+        if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_window_title_cpp'):
+            try:
+                cpp_renderer_core.set_window_title_cpp(title)
+            except Exception as e:
+                print(f"Error calling set_window_title_cpp: {e}")
+        else: 
+            self._warn_cpp_function_missing("set_window_title_cpp")
