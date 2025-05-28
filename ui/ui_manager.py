@@ -101,60 +101,60 @@ class UIManager:
         if not self.dirty_elements:
             return
 
-        for element_id in list(self.dirty_elements): # Iterate a copy as elements might get re-added if errors
-            element = self.elements_map.get(element_id)
-            if not element:
-                # print(f"Warning: Element {element_id} marked dirty but not found in elements_map.")
-                continue
+        for element in self.elements: # Iterate a copy as elements might get re-added if errors
+            if element.id in self.dirty_elements:
+                if not element:
+                    # print(f"Warning: Element {element_id} marked dirty but not found in elements_map.")
+                    continue
 
-            try:
-                if isinstance(element, Button):
-                    # Use get_effective_background_color for buttons
-                    effective_bg_color = element.get_effective_background_color()
-                    self.renderer.create_or_update_button(
-                        element_id=element.id,
-                        rect=element.rect,
-                        text=element.text,
-                        bg_color=effective_bg_color, # Use the effective color
-                        text_color=element.text_color,
-                        border_color=element.border_color,
-                        border_width=element.border_width,
-                        visible=element.visible,
-                        font_size=element.font_size # Pass font_size for Button
-                    )
-                elif isinstance(element, TextLabel):
-                    self.renderer.create_or_update_text_label(
-                        element_id=element.id,
-                        rect=element.rect,
-                        text=element.text,
-                        text_color=element.text_color,
-                        font_size=element.font_size, # Python side uses this name
-                        visible=element.visible
-                    )
-                elif isinstance(element, Panel): # <--- Новый блок для Panel
-                    self.renderer.create_or_update_panel(
-                        element_id=element.id,
-                        rect=element.rect,
-                        bg_color=element.background_color,
-                        border_color=element.border_color, # Убедитесь, что это свойство существует и возвращает кортеж (r,g,b,a)
-                        border_width=element.border_width,
-                        visible=element.visible
-                    )
-                # Add other element types here if necessary
-                else:
-                    # Fallback for generic UIElement or unknown types,
-                    # potentially just updating visibility if that's the only common C++ function.
-                    # For now, only Buttons and TextLabels are explicitly handled.
-                    # If a set_ui_element_visibility was the only common call:
-                    # self.renderer.set_ui_element_visibility(element.id, element.visible)
-                    pass
-            except Exception as e:
-                print(f"Error syncing element {element_id} of type {type(element)} to C++: {e}")
-                import traceback
-                traceback.print_exc() # Для более детальной информации об ошибке
-                # Optionally, re-add to dirty_elements if it was a transient error
-                # self.dirty_elements.add(element_id) 
-                # For now, we assume it's processed or error is logged.
+                try:
+                    if isinstance(element, Button):
+                        # Use get_effective_background_color for buttons
+                        effective_bg_color = element.get_effective_background_color()
+                        self.renderer.create_or_update_button(
+                            element_id=element.id,
+                            rect=element.rect,
+                            text=element.text,
+                            bg_color=effective_bg_color, # Use the effective color
+                            text_color=element.text_color,
+                            border_color=element.border_color,
+                            border_width=element.border_width,
+                            visible=element.visible,
+                            font_size=element.font_size # Pass font_size for Button
+                        )
+                    elif isinstance(element, TextLabel):
+                        self.renderer.create_or_update_text_label(
+                            element_id=element.id,
+                            rect=element.rect,
+                            text=element.text,
+                            text_color=element.text_color,
+                            font_size=element.font_size, # Python side uses this name
+                            visible=element.visible
+                        )
+                    elif isinstance(element, Panel): # <--- Новый блок для Panel
+                        self.renderer.create_or_update_panel(
+                            element_id=element.id,
+                            rect=element.rect,
+                            bg_color=element.background_color,
+                            border_color=element.border_color, # Убедитесь, что это свойство существует и возвращает кортеж (r,g,b,a)
+                            border_width=element.border_width,
+                            visible=element.visible
+                        )
+                    # Add other element types here if necessary
+                    else:
+                        # Fallback for generic UIElement or unknown types,
+                        # potentially just updating visibility if that's the only common C++ function.
+                        # For now, only Buttons and TextLabels are explicitly handled.
+                        # If a set_ui_element_visibility was the only common call:
+                        # self.renderer.set_ui_element_visibility(element.id, element.visible)
+                        pass
+                except Exception as e:
+                    print(f"Error syncing element {element.id} of type {type(element)} to C++: {e}")
+                    import traceback
+                    traceback.print_exc() # Для более детальной информации об ошибке
+                    # Optionally, re-add to dirty_elements if it was a transient error
+                    # self.dirty_elements.add(element_id) 
+                    # For now, we assume it's processed or error is logged.
 
         self.dirty_elements.clear()
 
