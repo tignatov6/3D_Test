@@ -95,6 +95,20 @@ else:
         print(f"CRITICAL: Failed to import test Renderer from utils.renderer_test: {e}")
         sys.exit(1)
 
+try:
+    from ui import UIManager
+except ImportError as e:
+    print(f"CRITICAL: Failed to import UIManager from ui: {e}")
+    # Depending on how critical UI is, you might choose to exit or continue with a dummy UIManager.
+    # For this integration, let's assume it's critical.
+    sys.exit(1)
+
+try:
+    from ui import Button, TextLabel # Import Button and TextLabel
+except ImportError as e:
+    print(f"CRITICAL: Failed to import Button or TextLabel from ui: {e}")
+    sys.exit(1)
+
 
 class Engine:
     @main_profiler
@@ -194,9 +208,53 @@ class Engine:
         if not hasattr(self, 'projection_matrix'):
             print("Warning: Projection matrix not set by Renderer. Creating default.")
             current_aspect_ratio = self.current_win_width / self.current_win_height if self.current_win_height > 0 else (WIN_RES.x / WIN_RES.y if WIN_RES.y > 0 else 1.0)
-            self.projection_matrix = self.create_projection_matrix(current_aspect_ratio) 
+            self.projection_matrix = self.create_projection_matrix(current_aspect_ratio)
         
-        print("Engine components initialized.")
+        # Initialize UIManager
+        try:
+            self.ui_manager = UIManager(renderer_instance=self.renderer)
+            print("UIManager initialized.")
+        except Exception as e_ui_manager_init:
+            print(f"CRITICAL: Error during UIManager initialization: {e_ui_manager_init}")
+            import traceback
+            traceback.print_exc()
+            self.cleanup_and_exit(1) # Exit if UI manager fails to init
+        
+        # --- Add UI Example Elements ---
+        # Define the callback function for the button
+        def example_button_on_click(button_instance):
+            print(f"Button '{button_instance.text}' clicked!")
+            if hasattr(self, 'info_label') and self.info_label:
+                # The TextLabel's text property setter should automatically call mark_dirty()
+                self.info_label.text = "Button was clicked!" 
+            else:
+                print("Info label not found on engine instance.")
+
+        # Create a TextLabel
+        self.info_label = TextLabel(
+            rect=pg.Rect(50, 50, 300, 40), # x, y, width, height
+            text="Hello, UI World!",
+            text_color=(200, 200, 200), # Light gray
+            font_size=20, # This font size is passed to C++, but current C++ impl. uses one default font size
+            auto_size_rect=False # If True, rect width/height might be adjusted by text content
+        )
+        self.ui_manager.add_element(self.info_label)
+
+        # Create a Button
+        self.example_button = Button(
+            rect=pg.Rect(50, 100, 200, 50), # x, y, width, height
+            text="Click Me!",
+            background_color=(0, 100, 200),    # Blue
+            hover_color=(0, 150, 255),       # Lighter blue
+            click_color=(0, 50, 150),        # Darker blue
+            text_color=(255, 255, 255),      # White text
+            border_color=(255, 255, 255),    # White border
+            border_width=2,
+            on_click=example_button_on_click # Assign the callback
+        )
+        self.ui_manager.add_element(self.example_button)
+        
+        print("Engine components initialized (including UI example).")
         
     def create_projection_matrix(self, aspect_ratio_val):
         """Создает проекционную матрицу на основе текущих настроек FOV, соотношения сторон и плоскостей отсечения."""
@@ -238,6 +296,9 @@ class Engine:
     def update(self):
         self.player.update() # Player.update теперь в основном обновляет векторы камеры
         self.scene.update() 
+        
+        if hasattr(self, 'ui_manager') and self.ui_manager:
+            self.ui_manager.update(self.delta_time)
 
         self.delta_time = self.clock.tick(MAX_FPS if 'MAX_FPS' in globals() else 0) / 1000.0 
         
@@ -268,6 +329,10 @@ class Engine:
             print("ERROR: renderer.prepare_for_new_frame() is not available!")
             self.is_running = False 
             return
+        
+        # Sync UI elements to C++ before rendering the scene
+        if hasattr(self, 'ui_manager') and self.ui_manager:
+            self.ui_manager.sync_dirty_elements_to_cpp()
 
         # Рендеринг сцены (передача объектов в C++ для накопления треугольников)
         self.scene.render() 
@@ -302,15 +367,19 @@ class Engine:
         
         # Обработка системных событий SDL (выход, изменение размера окна и т.д.)
         for event_data in self.sdl_events: # sdl_events - это список словарей
+            # Pass event to UIManager first
+            if hasattr(self, 'ui_manager') and self.ui_manager:
+                self.ui_manager.handle_event(event_data) # event_data is a dict from C++
+
             event_type = event_data.get('type')
             if event_type == 'QUIT':
                 self.is_running = False
-                break
+                break # Exit loop if QUIT event is received
             if event_type == 'KEYDOWN':
                 # SDL_SCANCODE_ESCAPE = 41 (пример, лучше иметь константы)
                 if event_data.get('scancode') == 41: # SDL_SCANCODE_ESCAPE
                     self.is_running = False
-                    break
+                    break # Exit loop if ESCAPE is pressed
             if event_type == 'WINDOWEVENT':
                 if event_data.get('event_id') == SDL_WINDOWEVENT_RESIZED or \
                    event_data.get('event_id') == SDL_WINDOWEVENT_SIZE_CHANGED:
@@ -319,14 +388,24 @@ class Engine:
                     if new_w != self.current_win_width or new_h != self.current_win_height:
                         print(f"Engine: Detected SDL WINDOWEVENT_SIZE_CHANGED/RESIZED to {new_w}x{new_h}")
                         self.update_resolution_dependent_settings(new_w, new_h)
+            
+            if not self.is_running: # Check if QUIT or ESCAPE was processed
+                break
         
         # Дополнительно обрабатываем события Pygame, не связанные с окном (джойстик, аудио и т.д.)
+        # These are Pygame event objects, not dicts. UIManager might not handle them
+        # unless its elements are designed for both or events are converted.
+        # For now, UIManager primarily processes SDL dict events.
         for event in pg.event.get():
             if event.type == pg.QUIT: # Общее событие Pygame QUIT на всякий случай
                 self.is_running = False
             # Здесь можно добавить обработку других событий Pygame
             # if hasattr(self.player, 'handle_other_pygame_event'):
             #    self.player.handle_other_pygame_event(event, self.delta_time)
+            #
+            # If UI elements need to handle these Pygame events, they would need conversion
+            # or UIManager.handle_event would need to distinguish.
+            # Example: self.ui_manager.handle_event(pygame_event_to_dict_adapter(event))
 
     @main_profiler
     def manage_gc(self):

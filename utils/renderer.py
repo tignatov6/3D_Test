@@ -291,6 +291,93 @@ class Renderer:
         """Вспомогательная функция для предупреждения об отсутствующей C++ функции."""
         print(f"Warning: C++ function '{func_name}' not found in cpp_renderer_core module.")
 
+    # --- Helper for color unpacking ---
+    def _unpack_color(self, color: tuple, default_alpha: int = 255) -> tuple:
+        """Unpacks an RGB or RGBA color tuple into (r, g, b, a), defaulting alpha if not present."""
+        if len(color) == 3:
+            return (color[0], color[1], color[2], default_alpha)
+        elif len(color) == 4:
+            return color
+        else:
+            # Fallback for invalid color tuple, though Pygame colors are usually well-formed
+            print(f"Warning: Invalid color tuple received: {color}. Defaulting to black.")
+            return (0, 0, 0, default_alpha)
+
+    # --- UI Element C++ Wrappers ---
+    @profiler
+    def create_or_update_button(self, element_id: str, rect: pygame.Rect, text: str, 
+                                bg_color: tuple, text_color: tuple, 
+                                border_color: tuple or None, border_width: int, 
+                                visible: bool, font_size: int): # Added font_size
+        if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'create_or_update_button_cpp'):
+            self._warn_cpp_function_missing("create_or_update_button_cpp")
+            return
+
+        bg_r, bg_g, bg_b, bg_a = self._unpack_color(bg_color)
+        txt_r, txt_g, txt_b, txt_a = self._unpack_color(text_color)
+        
+        if border_color and border_width > 0:
+            brd_r, brd_g, brd_b, brd_a = self._unpack_color(border_color)
+        else:
+            brd_r, brd_g, brd_b, brd_a = (0, 0, 0, 0) # Default non-visible border
+            border_width = 0 # Ensure border_width is 0 if no color
+
+        try:
+            cpp_renderer_core.create_or_update_button_cpp(
+                element_id, rect.x, rect.y, rect.w, rect.h,
+                text,
+                bg_r, bg_g, bg_b, bg_a,
+                txt_r, txt_g, txt_b, txt_a,
+                brd_r, brd_g, brd_b, brd_a,
+                border_width, visible,
+                font_size # Pass font_size to C++
+            )
+        except Exception as e:
+            print(f"Error calling create_or_update_button_cpp for ID {element_id}: {e}")
+
+    @profiler
+    def create_or_update_text_label(self, element_id: str, rect: pygame.Rect, text: str, 
+                                    text_color: tuple, font_size: int, visible: bool):
+        if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'create_or_update_text_label_cpp'):
+            self._warn_cpp_function_missing("create_or_update_text_label_cpp")
+            return
+
+        txt_r, txt_g, txt_b, txt_a = self._unpack_color(text_color)
+        
+        # C++ side uses a default font size if font_size <= 0
+        effective_font_size = font_size if font_size > 0 else 0 
+
+        try:
+            cpp_renderer_core.create_or_update_text_label_cpp(
+                element_id, rect.x, rect.y, rect.w, rect.h,
+                text,
+                txt_r, txt_g, txt_b, txt_a,
+                effective_font_size, visible
+            )
+        except Exception as e:
+            print(f"Error calling create_or_update_text_label_cpp for ID {element_id}: {e}")
+
+    @profiler
+    def remove_ui_element(self, element_id: str):
+        if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'remove_ui_element_cpp'):
+            self._warn_cpp_function_missing("remove_ui_element_cpp")
+            return
+        try:
+            cpp_renderer_core.remove_ui_element_cpp(element_id)
+        except Exception as e:
+            print(f"Error calling remove_ui_element_cpp for ID {element_id}: {e}")
+
+    @profiler
+    def set_ui_element_visibility(self, element_id: str, visible: bool):
+        if not CPP_MODULE_LOADED or not hasattr(cpp_renderer_core, 'set_ui_element_visibility_cpp'):
+            self._warn_cpp_function_missing("set_ui_element_visibility_cpp")
+            return
+        try:
+            cpp_renderer_core.set_ui_element_visibility_cpp(element_id, visible)
+        except Exception as e:
+            print(f"Error calling set_ui_element_visibility_cpp for ID {element_id}: {e}")
+
+
     def set_window_title(self, title: str):
         if CPP_MODULE_LOADED and hasattr(cpp_renderer_core, 'set_window_title_cpp'):
             try:
